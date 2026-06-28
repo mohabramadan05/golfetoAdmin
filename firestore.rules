@@ -1,0 +1,213 @@
+rules_version = '2';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Golfeto Firestore security rules.
+//
+// Design goal: replace "test mode" (open) access with authenticated, per-document
+// ownership and FIELD-LEVEL write restrictions, WITHOUT breaking the app's current
+// client-driven flows (the app writes directly via the client SDK — there is no
+// server write layer for most operations).
+//
+// READS are intentionally kept at "any signed-in user" for `users`, `drivers`,
+// `rides`, `pricing`, `app_config`, `compounds`, and `offers`, because the live
+// app reads peer records directly (rider ⇄ driver name/phone during a ride, the
+// open-ride-request broadcast stream, etc.). Tightening reads to ride-participants
+// only is a recommended HARDENING follow-up — see SECURITY.md — but requires
+// mapping every read path first so it doesn't silently break screens.
+//
+// RESIDUAL TRUST (cannot be fully fixed in rules with the current architecture;
+// flagged in SECURITY.md):
+//   • The assigned driver writes the ride's financial fields (price, driverNet,
+//     waitingFee) from the client. Rules bound *who* may write them to that ride's
+//     driver, but not that the amounts are correct. Move to a Cloud Function /
+//     transaction to fully secure.
+//   • Any signed-in user can bump a driver's rating aggregate (ratingSum/
+//     ratingCount) and an offer's usedCount (±1). Bounded in scope, but not tied to
+//     a verified ride/redemption. Move these increments server-side to fully secure.
+//
+// ADMIN APP: `isAdmin()` below checks a custom claim `admin == true`. If the
+// separate admin app uses the Firebase Admin SDK (a service account), it BYPASSES
+// these rules entirely and you can ignore isAdmin(). If it is a client app, mint
+// the `admin` custom claim for those accounts (see SECURITY.md).
+// ─────────────────────────────────────────────────────────────────────────────
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Helpers ──────────────────────────────────────────────────────────────
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    function isUser(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+    function isAdmin() {
+      return isSignedIn() && request.auth.token.admin == true;
+    }
+    // Keys changed by this write.
+    function changedKeys() {
+      return request.resource.data.diff(resource.data).affectedKeys();
+    }
+
+    // ── users/{uid} ──────────────────────────────────────────────────────────
+    // Profile docs. Owner-only writes; role and phone are immutable from the
+    // client (prevents privilege escalation to admin and phone spoofing).
+    match /users/{uid} {
+      allow read: if isSignedIn();
+      allow create: if isUser(uid)
+                    && request.resource.data.role in ['rider', 'driver'];
+      allow update: if (isUser(uid)
+                        && request.resource.data.role == resource.data.role
+                        && request.resource.data.phone == resource.data.phone)
+                    || isAdmin();
+      allow delete: if false;
+    }
+
+    // ── drivers/{uid} ────────────────────────────────────────────────────────
+    // The driver owns operational fields; approval/earnings/settlement fields are
+    // server/admin-controlled. Two narrow cross-party writes are allowed to match
+    // current flows: a rider freeing the driver on cancel (isFree) and a rider
+    // posting a rating (ratingSum/ratingCount).
+    match /drivers/{uid} {
+      function driverOwnerFields() {
+        return ['isOnline', 'isFree', 'currentLat', 'currentLng', 'lastSeenAt',
+                'fcmToken', 'compoundId', 'cartNumber', 'licensePlate', 'carType',
+                'seatNumber', 'maxPassengers'];
+      }
+
+      allow read: if isSignedIn();
+
+      // Self-registration always starts pending and unblocked — a driver cannot
+      // self-approve or pre-load earnings.
+      allow create: if isUser(uid)
+                    && request.resource.data.approvalStatus == 'pending'
+                    && request.resource.data.settlementBlocked == false
+                    && request.resource.data.totalEarnings == 0
+                    && request.resource.data.totalRides == 0;
+
+      allow update: if isAdmin()
+                    // Owner edits only operational fields.
+                    || (isUser(uid)
+                        && changedKeys().hasOnly(driverOwnerFields()))
+                    // A rider posts a rating (increment-only on the aggregate).
+                    // `.get(..,0)` so the very first rating (no existing field) works.
+                    || (isSignedIn()
+                        && changedKeys().hasOnly(['ratingSum', 'ratingCount'])
+                        && request.resource.data.ratingCount
+                             == resource.data.get('ratingCount', 0) + 1)
+                    // A rider frees the driver when cancelling a ride.
+                    || (isSignedIn() && changedKeys().hasOnly(['isFree']));
+
+      allow delete: if false;
+    }
+
+    // ── rides/{rideId} ───────────────────────────────────────────────────────
+    // Created by the rider (unassigned, status 'requested'). Updatable by the
+    // rider (cancel/rate), the assigned driver (status/fare/waiting), or a free
+    // driver atomically claiming an unassigned request.
+    match /rides/{rideId} {
+      allow read: if isSignedIn();
+
+      allow create: if isSignedIn()
+                    && request.resource.data.riderId == request.auth.uid
+                    && request.resource.data.status == 'requested'
+                    && request.resource.data.driverId == null;
+
+      allow update: if isAdmin()
+                    // The rider on the ride (cancel, rate, etc.).
+                    || resource.data.riderId == request.auth.uid
+                    // The already-assigned driver.
+                    || resource.data.driverId == request.auth.uid
+                    // A driver claiming an open request (the atomic accept).
+                    || (resource.data.status == 'requested'
+                        && resource.data.driverId == null
+                        && request.resource.data.driverId == request.auth.uid
+                        && request.resource.data.status == 'accepted');
+
+      allow delete: if false;
+
+      // ── rides/{rideId}/messages/{messageId} ──
+      // Only the two parties on the ride may read/post; sender must be the caller.
+      match /messages/{messageId} {
+        function ride() {
+          return get(/databases/$(database)/documents/rides/$(rideId)).data;
+        }
+        function isRideParticipant() {
+          return isSignedIn()
+                 && (ride().riderId == request.auth.uid
+                     || ride().driverId == request.auth.uid);
+        }
+        allow read: if isRideParticipant();
+        allow create: if isRideParticipant()
+                      && request.resource.data.senderId == request.auth.uid;
+        allow update, delete: if false;
+      }
+    }
+
+    // ── pricing / app_config / compounds ─────────────────────────────────────
+    // Read-only reference data; only the admin app writes it.
+    match /pricing/{doc} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+    match /app_config/{doc} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+    match /compounds/{doc} {
+      allow read: if isSignedIn();
+      allow write: if isAdmin();
+    }
+
+    // ── offers/{offerId} ─────────────────────────────────────────────────────
+    // Admin-managed. The one client-allowed mutation is the redemption counter,
+    // restricted to a ±1 change on `usedCount` only.
+    match /offers/{offerId} {
+      allow read: if isSignedIn();
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin()
+                    || (isSignedIn()
+                        && changedKeys().hasOnly(['usedCount'])
+                        && (request.resource.data.usedCount
+                              == resource.data.get('usedCount', 0) + 1
+                            || request.resource.data.usedCount
+                              == resource.data.get('usedCount', 0) - 1));
+    }
+
+    // ── offer_redemptions/{id} ───────────────────────────────────────────────
+    // A rider's own redemption ledger. Create as 'applied'; the only client
+    // update is releasing it (status → 'released').
+    match /offer_redemptions/{id} {
+      allow read: if isAdmin()
+                  || (isSignedIn() && resource.data.uid == request.auth.uid);
+      allow create: if isSignedIn()
+                    && request.resource.data.uid == request.auth.uid
+                    && request.resource.data.status == 'applied';
+      allow update: if isAdmin()
+                    || (resource.data.uid == request.auth.uid
+                        && changedKeys().hasOnly(['status']));
+      allow delete: if false;
+    }
+
+    // ── settlements/{driverId}_{weekId} ──────────────────────────────────────
+    // The driver uploads a payment proof for their own cycle. They may set status
+    // only to 'pending'/'submitted' — approval/rejection is admin-only.
+    match /settlements/{id} {
+      allow read: if isAdmin()
+                  || (isSignedIn() && resource.data.driverId == request.auth.uid);
+      allow create: if isAdmin()
+                    || (request.resource.data.driverId == request.auth.uid
+                        && request.resource.data.status in ['pending', 'submitted']);
+      allow update: if isAdmin()
+                    || (resource.data.driverId == request.auth.uid
+                        && request.resource.data.driverId == request.auth.uid
+                        && request.resource.data.status in ['pending', 'submitted']);
+      allow delete: if false;
+    }
+
+    // ── Default deny ─────────────────────────────────────────────────────────
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
