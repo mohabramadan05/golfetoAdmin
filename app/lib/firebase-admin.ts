@@ -20,6 +20,16 @@ import { getFirestore, type Firestore } from "firebase-admin/firestore";
 
 let cached: App | undefined;
 
+/** Strips surrounding whitespace and matching quotes — secrets/env values are
+ *  sometimes stored with the wrapping quotes from a .env line. */
+function unwrap(s: string): string {
+  let v = s.trim();
+  if (v.length >= 2 && ((v[0] === "'" && v.endsWith("'")) || (v[0] === '"' && v.endsWith('"')))) {
+    v = v.slice(1, -1);
+  }
+  return v;
+}
+
 function hasServiceAccountKey(): boolean {
   return !!process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
 }
@@ -41,7 +51,7 @@ function getApp(): App {
     return cached;
   }
   if (hasServiceAccountKey()) {
-    const svc = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY as string) as ServiceAccount & {
+    const svc = JSON.parse(unwrap(process.env.FIREBASE_SERVICE_ACCOUNT_KEY as string)) as ServiceAccount & {
       project_id?: string;
     };
     cached = initializeApp({ credential: cert(svc), projectId: svc.project_id ?? svc.projectId });
