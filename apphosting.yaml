@@ -21,16 +21,18 @@ env:
     availability:
       - RUNTIME
 
-# Credentials: by default the deployed app uses the App Hosting backend's own
-# service account via Application Default Credentials (no key needed). Grant
-# that service account these IAM roles for the app to work at runtime:
+  # Service-account JSON (same one as local .env.local), stored in Secret
+  # Manager. Signing session cookies with this key happens locally, so the
+  # backend needs NO extra IAM roles. Create the secret BEFORE deploying:
+  #   firebase apphosting:secrets:set FIREBASE_SERVICE_ACCOUNT_KEY --data-file <serviceAccount.json>
+  # (grant access when prompted), then deploy.
+  - variable: FIREBASE_SERVICE_ACCOUNT_KEY
+    secret: FIREBASE_SERVICE_ACCOUNT_KEY
+    availability:
+      - RUNTIME
+
+# Alternative (no secret): remove the block above to use the backend's own
+# service account via Application Default Credentials. Then grant that service
+# account these IAM roles:
 #   - Cloud Datastore User           (Firestore read/write)
-#   - Service Account Token Creator  (to mint login session cookies)
-#
-# Alternative — reuse the same JSON key as local dev instead of ADC. Create the
-# secret once:  firebase apphosting:secrets:set FIREBASE_SERVICE_ACCOUNT_KEY
-# then uncomment:
-#   - variable: FIREBASE_SERVICE_ACCOUNT_KEY
-#     secret: FIREBASE_SERVICE_ACCOUNT_KEY
-#     availability:
-#       - RUNTIME
+#   - Service Account Token Creator  (to sign login session cookies)
