@@ -1,0 +1,36 @@
+# Firebase App Hosting configuration.
+# Docs: https://firebase.google.com/docs/app-hosting/configure
+#
+# App Hosting does NOT read .env.local — runtime config must live here.
+
+runConfig:
+  minInstances: 0
+  maxInstances: 2
+
+env:
+  # Public Firebase Web API key (safe to commit — it ships in client apps).
+  # Used server-side by the login route (Identity Toolkit REST sign-in).
+  - variable: FIREBASE_WEB_API_KEY
+    value: AIzaSyBpCaCKhVVAfjoyppv5dwWLKjms1jyEY9M
+    availability:
+      - RUNTIME
+
+  # Comma-separated admin allowlist (only these emails may sign in).
+  - variable: ADMIN_EMAILS
+    value: mohabhrc58@gmail.com
+    availability:
+      - RUNTIME
+
+# Credentials: by default the deployed app uses the App Hosting backend's own
+# service account via Application Default Credentials (no key needed). Grant
+# that service account these IAM roles for the app to work at runtime:
+#   - Cloud Datastore User           (Firestore read/write)
+#   - Service Account Token Creator  (to mint login session cookies)
+#
+# Alternative — reuse the same JSON key as local dev instead of ADC. Create the
+# secret once:  firebase apphosting:secrets:set FIREBASE_SERVICE_ACCOUNT_KEY
+# then uncomment:
+#   - variable: FIREBASE_SERVICE_ACCOUNT_KEY
+#     secret: FIREBASE_SERVICE_ACCOUNT_KEY
+#     availability:
+#       - RUNTIME
