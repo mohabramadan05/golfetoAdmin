@@ -33,6 +33,12 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 
+# Firebase service-account keys — NEVER commit
+golfeto-app-firebase.json
+*-firebase-adminsdk-*.json
+*serviceAccount*.json
+service-account*.json
+
 # vercel
 .vercel
 
