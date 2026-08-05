@@ -1,8 +1,11 @@
 import {
+  seedCaseNotes,
+  seedCases,
   seedCompounds,
   seedDrivers,
   seedOffers,
   seedRedemptions,
+  seedReferrals,
   seedRides,
   seedRiders,
   seedSettlements,
@@ -23,6 +26,9 @@ export function demoData(): AdminData {
     rides,
     compounds: seedCompounds(),
     redemptions: seedRedemptions(),
+    referrals: seedReferrals(),
+    cases: seedCases(),
+    caseNotes: seedCaseNotes(),
     pricing: {
       baseFare: 8,
       pricePerKm: 4.5,
@@ -37,6 +43,13 @@ export function demoData(): AdminData {
       instapay: "golfeto@instapay",
       instructions:
         "Send the EXACT app-fee amount shown above to the wallet/InstaPay. Keep the transfer receipt, then upload a clear screenshot here. Settlements are reviewed within 24h. Short or missing payments will be rejected and may block you from going online.",
+    },
+    // Mirrors the Cloud Function's defaults for an absent app_config/referral.
+    referralConfig: { enabled: true, inviterReward: 10, inviteeReward: 10 },
+    supportConfig: {
+      emergencyPhone: "122",
+      supportPhone: "+20 100 000 0000",
+      supportEmail: "support.golfeto@gmail.com",
     },
   };
 }

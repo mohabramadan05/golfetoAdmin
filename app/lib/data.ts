@@ -4,17 +4,26 @@ import { adminDb } from "./firebase-admin";
 import type {
   AdminData,
   ApprovalStatus,
+  Case,
+  CaseCategory,
+  CaseNote,
+  CasePriority,
+  CaseSource,
+  CaseStatus,
   Compound,
   Config,
   Driver,
   Offer,
   Pricing,
   Redemption,
+  Referral,
+  ReferralConfig,
   Ride,
   RideStatus,
   Rider,
   Settlement,
   SettlementStatus,
+  SupportConfig,
 } from "./types";
 
 type Doc = FirebaseFirestore.QueryDocumentSnapshot;
@@ -54,7 +63,7 @@ function str(v: unknown, fallback = ""): string {
 /** Fetches every collection the admin panel needs and maps it to display types. */
 export async function getAdminData(): Promise<AdminData> {
   const db = adminDb();
-  const [usersSnap, driversSnap, compoundsSnap, settlementsSnap, ridesSnap, offersSnap, redemptionsSnap, pricingDoc, configDoc] =
+  const [usersSnap, driversSnap, compoundsSnap, settlementsSnap, ridesSnap, offersSnap, redemptionsSnap, referralsSnap, casesSnap, caseNotesSnap, pricingDoc, configDoc, referralCfgDoc, supportCfgDoc] =
     await Promise.all([
       db.collection("users").get(),
       db.collection("drivers").get(),
@@ -63,8 +72,13 @@ export async function getAdminData(): Promise<AdminData> {
       db.collection("rides").orderBy("createdAt", "desc").limit(200).get(),
       db.collection("offers").get(),
       db.collection("offer_redemptions").orderBy("createdAt", "desc").limit(50).get(),
+      db.collection("referrals").orderBy("createdAt", "desc").limit(300).get(),
+      db.collection("cases").orderBy("createdAt", "desc").limit(300).get(),
+      db.collection("case_notes").orderBy("createdAt", "asc").limit(1000).get(),
       db.collection("pricing").doc("pricing").get(),
       db.collection("app_config").doc("settlement").get(),
+      db.collection("app_config").doc("referral").get(),
+      db.collection("app_config").doc("support").get(),
     ]);
 
   const users = new Map<string, Data>();
@@ -128,10 +142,19 @@ export async function getAdminData(): Promise<AdminData> {
       totalEarnings: num(d.totalEarnings),
       settlementBlocked: d.settlementBlocked === true,
       lastSettlementAt: toDate(d.lastSettlementAt) ? fmtDate(d.lastSettlementAt) : null,
+      strikesCount: num(d.strikesCount),
+      isBlocked: d.isBlocked === true,
       hasLicense: !!d.licenseImageUrl,
       hasRecord: !!d.criminalRecordUrl,
       licenseImageUrl: d.licenseImageUrl ? str(d.licenseImageUrl) : null,
       criminalRecordUrl: d.criminalRecordUrl ? str(d.criminalRecordUrl) : null,
+      dob: toDate(d.dob) ? fmtDate(d.dob) : null,
+      city: str(d.city),
+      driverPhotoUrl: d.driverPhotoUrl ? str(d.driverPhotoUrl) : null,
+      idImageUrl: d.idImageUrl ? str(d.idImageUrl) : null,
+      carImageUrl: d.carImageUrl ? str(d.carImageUrl) : null,
+      infoConfirmed: d.infoConfirmed === true,
+      termsAccepted: d.termsAccepted === true,
       joined: fmtDate(u?.createdAt ?? d.createdAt),
     };
   });
@@ -176,6 +199,9 @@ export async function getAdminData(): Promise<AdminData> {
         language: str(d.language, "en") === "ar" ? "ar" : "en",
         rides: riderRides.get(doc.id) ?? 0,
         spent: Math.round((riderSpent.get(doc.id) ?? 0) * 100) / 100,
+        walletBalance: Math.round(Number(d.walletBalance ?? 0) * 100) / 100,
+        referralCode: str(d.referralCode).toUpperCase(),
+        referredByName: d.referredBy ? nameOf(str(d.referredBy)) : null,
       };
     });
 
@@ -212,6 +238,26 @@ export async function getAdminData(): Promise<AdminData> {
     };
   });
 
+  const referrals: Referral[] = referralsSnap.docs.map((doc) => {
+    const d = doc.data();
+    const created = toDate(d.createdAt);
+    return {
+      id: doc.id,
+      inviterUid: str(d.inviterUid),
+      inviterName: nameOf(str(d.inviterUid)),
+      inviteeUid: str(d.inviteeUid),
+      // Snapshotted at signup, so it survives the invitee renaming themselves.
+      inviteeName: str(d.inviteeName) || nameOf(str(d.inviteeUid)),
+      code: str(d.code).toUpperCase(),
+      status: str(d.status) === "rewarded" ? "rewarded" : "pending",
+      inviterReward: num(d.inviterReward),
+      inviteeReward: num(d.inviteeReward),
+      createdAt: fmtDateTime(d.createdAt) ?? "—",
+      createdAtMs: created ? created.getTime() : undefined,
+      rewardedAt: fmtDateTime(d.rewardedAt),
+    };
+  });
+
   const compounds: Compound[] = compoundsSnap.docs.map((doc) => {
     const d = doc.data();
     return {
@@ -224,6 +270,51 @@ export async function getAdminData(): Promise<AdminData> {
       radius: num(d.boundaryRadiusMeters),
       drivers: compoundDrivers.get(doc.id) ?? 0,
       activeRides: compoundActiveRides.get(doc.id) ?? 0,
+    };
+  });
+
+  const CATEGORIES: CaseCategory[] = ["route_dispute", "billing_dispute", "driver_behavior", "vehicle_condition", "safety", "other"];
+  const PRIORITIES: CasePriority[] = ["low", "medium", "high", "critical"];
+  const STATUSES: CaseStatus[] = ["new", "under_investigation", "resolved"];
+
+  const cases: Case[] = casesSnap.docs.map((doc) => {
+    const d = doc.data();
+    const created = toDate(d.createdAt);
+    const assignedId = d.assignedAdminId ? str(d.assignedAdminId) : null;
+    return {
+      id: doc.id,
+      rideId: str(d.rideId),
+      passengerId: str(d.passengerId),
+      passengerName: nameOf(str(d.passengerId)),
+      driverId: str(d.driverId),
+      driverName: nameOf(str(d.driverId)),
+      assignedAdminId: assignedId,
+      assignedAdminName: assignedId ? nameOf(assignedId) : null,
+      source: (["email", "manual", "rider"].includes(str(d.source)) ? str(d.source) : "email") as CaseSource,
+      category: CATEGORIES.includes(str(d.category) as CaseCategory) ? (str(d.category) as CaseCategory) : "other",
+      priority: PRIORITIES.includes(str(d.priority) as CasePriority) ? (str(d.priority) as CasePriority) : "medium",
+      status: STATUSES.includes(str(d.status) as CaseStatus) ? (str(d.status) as CaseStatus) : "new",
+      passengerComplaintText: str(d.passengerComplaintText),
+      resolutionSummary: d.resolutionSummary ? str(d.resolutionSummary) : null,
+      strikeIssued: d.strikeIssued === true,
+      refundAmount: Number(d.refundAmount ?? 0),
+      createdAt: fmtDateTime(d.createdAt) ?? "—",
+      createdAtMs: created ? created.getTime() : undefined,
+      updatedAt: fmtDateTime(d.updatedAt),
+    };
+  });
+
+  const caseNotes: CaseNote[] = caseNotesSnap.docs.map((doc) => {
+    const d = doc.data();
+    const created = toDate(d.createdAt);
+    return {
+      id: doc.id,
+      caseId: str(d.caseId),
+      adminId: str(d.adminId),
+      adminName: str(d.adminName) || nameOf(str(d.adminId)),
+      noteText: str(d.noteText),
+      createdAt: fmtDateTime(d.createdAt) ?? "—",
+      createdAtMs: created ? created.getTime() : undefined,
     };
   });
 
@@ -245,7 +336,23 @@ export async function getAdminData(): Promise<AdminData> {
     instructions: str(cd.instructions),
   };
 
-  return { drivers, settlements, offers, riders, rides, compounds, redemptions, pricing, config };
+  // Defaults mirror functions/index.js — an absent doc still pays 10/10 EGP,
+  // so the panel must show the same numbers rather than zeros.
+  const rc = referralCfgDoc.data() ?? {};
+  const referralConfig: ReferralConfig = {
+    enabled: rc.enabled !== false,
+    inviterReward: num(rc.inviterReward, 10),
+    inviteeReward: num(rc.inviteeReward, 10),
+  };
+
+  const sc = supportCfgDoc.data() ?? {};
+  const supportConfig: SupportConfig = {
+    emergencyPhone: str(sc.emergencyPhone),
+    supportPhone: str(sc.supportPhone),
+    supportEmail: str(sc.supportEmail),
+  };
+
+  return { drivers, settlements, offers, riders, rides, compounds, redemptions, referrals, cases, caseNotes, pricing, config, referralConfig, supportConfig };
 }
 
 function mapRide(
@@ -262,7 +369,9 @@ function mapRide(
   return {
     id: str(d.id, doc.id),
     rider: nameOf(str(d.riderId)),
+    riderId: str(d.riderId),
     driver: d.driverId ? nameOf(str(d.driverId)) : null,
+    driverId: d.driverId ? str(d.driverId) : null,
     compound: compoundName.get(str(d.compoundId)) ?? str(d.compoundId),
     status: (str(d.status, "requested") as RideStatus) || "requested",
     type: str(d.type) === "delivery" ? "delivery" : "ride",

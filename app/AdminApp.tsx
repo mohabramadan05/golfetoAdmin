@@ -1,30 +1,45 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useRef, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type {
   AdminData,
   AdminUser,
+  Case,
+  CaseNote,
   Config,
   Driver,
   DrawerState,
   Offer,
   Pricing,
+  ReferralConfig,
   Screen,
   Settlement,
+  SupportConfig,
 } from "./lib/types";
 import { avatar, C, Chip, hexA, Icon, initials, money } from "./lib/ui";
 import {
+  addCaseNote as addCaseNoteAction,
   approveDriver as approveDriverAction,
   approveSettlement as approveSettlementAction,
+  createCase as createCaseAction,
   createOffer as createOfferAction,
+  creditWalletCompensation as creditWalletAction,
+  issueDriverStrike as issueDriverStrikeAction,
   refreshData as refreshDataAction,
   rejectDriver as rejectDriverAction,
   rejectSettlement as rejectSettlementAction,
+  resetDriverStrikes as resetDriverStrikesAction,
+  resolveCase as resolveCaseAction,
   saveConfig as saveConfigAction,
   savePricing as savePricingAction,
+  saveReferralConfig as saveReferralConfigAction,
+  saveSupportConfig as saveSupportConfigAction,
+  setCasePriority as setCasePriorityAction,
+  setCaseStatus as setCaseStatusAction,
   setDriverActive as setDriverActiveAction,
   toggleOffer as toggleOfferAction,
+  unblockDriver as unblockDriverAction,
   type ActionResult,
 } from "./actions";
 
@@ -42,14 +57,34 @@ const HEAD_CELL: CSSProperties = {
 };
 const GRAD = "linear-gradient(135deg,#1A3FD4,#2E8BFF 60%,#00C2FF)";
 
+const CASE_CATEGORIES: [string, string][] = [
+  ["route_dispute", "Route dispute"],
+  ["billing_dispute", "Billing dispute"],
+  ["driver_behavior", "Driver behavior"],
+  ["vehicle_condition", "Vehicle condition"],
+  ["safety", "Safety"],
+  ["other", "Other"],
+];
+const CASE_PRIORITIES: [string, string][] = [
+  ["low", "Low"],
+  ["medium", "Medium"],
+  ["high", "High"],
+  ["critical", "Critical"],
+];
+const catLabel = (k: string) => CASE_CATEGORIES.find((c) => c[0] === k)?.[1] ?? "Other";
+const prioLabel = (k: string) => CASE_PRIORITIES.find((c) => c[0] === k)?.[1] ?? k;
+const statusLabel = (k: string) => (k === "under_investigation" ? "Investigating" : k === "new" ? "New" : "Resolved");
+
 const NAV: { key: Screen; label: string; icon: string }[] = [
   { key: "dashboard", label: "Dashboard", icon: "dashboard" },
   { key: "settlements", label: "Settlements", icon: "settlement" },
   { key: "drivers", label: "Drivers", icon: "driver" },
+  { key: "cases", label: "Cases", icon: "flag" },
   { key: "live", label: "Live Rides", icon: "live" },
   { key: "history", label: "Ride History", icon: "history" },
   { key: "riders", label: "Riders", icon: "rider" },
   { key: "offers", label: "Offers", icon: "offer" },
+  { key: "referrals", label: "Referrals", icon: "rider" },
   { key: "compounds", label: "Compounds", icon: "compound" },
   { key: "pricing", label: "Pricing", icon: "pricing" },
   { key: "settings", label: "Settings", icon: "settings" },
@@ -59,10 +94,12 @@ const TITLES: Record<Screen, [string, string]> = {
   dashboard: ["Dashboard", "Operational snapshot · Cairo compounds"],
   settlements: ["Settlements", "Weekly app-fee review queue"],
   drivers: ["Drivers", "Approval queue & driver directory"],
+  cases: ["Cases", "Passenger complaints & dispute resolution"],
   live: ["Live Rides", "Rides in progress right now"],
   history: ["Ride History", "Completed & cancelled rides"],
   riders: ["Riders", "Customer directory"],
   offers: ["Offers", "Promo codes & redemptions"],
+  referrals: ["Referrals", "Invite-a-friend rewards"],
   compounds: ["Compounds", "Geofenced operating areas"],
   pricing: ["Pricing", "Global fare formula"],
   settings: ["Settings", "Settlement configuration"],
@@ -91,17 +128,30 @@ export default function AdminApp({
   const [settleTab, setSettleTab] = useState("submitted");
   const [driverTab, setDriverTab] = useState("all");
   const [histType, setHistType] = useState("all");
+  const [caseTab, setCaseTab] = useState("open");
 
   const [drivers, setDrivers] = useState<Driver[]>(initialData.drivers);
   const [settlements, setSettlements] = useState<Settlement[]>(initialData.settlements);
   const [offers, setOffers] = useState<Offer[]>(initialData.offers);
   const [pricing, setPricing] = useState<Pricing>(initialData.pricing);
   const [config, setConfig] = useState<Config>(initialData.config);
+  const [referralConfig, setReferralConfig] = useState<ReferralConfig>(initialData.referralConfig);
+  const [supportConfig, setSupportConfig] = useState<SupportConfig>(initialData.supportConfig);
+  const [referrals, setReferrals] = useState(initialData.referrals);
 
   const [riders, setRiders] = useState(initialData.riders);
   const [rides, setRides] = useState(initialData.rides);
   const [compounds, setCompounds] = useState(initialData.compounds);
   const [redemptions, setRedemptions] = useState(initialData.redemptions);
+  const [cases, setCases] = useState<Case[]>(initialData.cases);
+  const [caseNotes, setCaseNotes] = useState<CaseNote[]>(initialData.caseNotes);
+
+  const [caseForm, setCaseForm] = useState(false);
+  const [caseDraft, setCaseDraft] = useState({ rideId: "", category: "driver_behavior", priority: "medium", source: "email", complaint: "" });
+  const [noteDraft, setNoteDraft] = useState("");
+  const [resolveDraft, setResolveDraft] = useState("");
+  const [creditDraft, setCreditDraft] = useState("");
+  const [liveTickAt, setLiveTickAt] = useState<number | null>(null);
 
   const [offerDraft, setOfferDraft] = useState({ code: "", title: "", type: "percent", value: "", maxDiscount: "", perUser: "1" });
   const [refreshing, setRefreshing] = useState(false);
@@ -152,6 +202,11 @@ export default function AdminApp({
         case "drivers":
           setDrivers(d.drivers);
           break;
+        case "cases":
+          setCases(d.cases);
+          setCaseNotes(d.caseNotes);
+          setDrivers(d.drivers);
+          break;
         case "live":
         case "history":
           setRides(d.rides);
@@ -163,6 +218,10 @@ export default function AdminApp({
           setOffers(d.offers);
           setRedemptions(d.redemptions);
           break;
+        case "referrals":
+          setReferrals(d.referrals);
+          setReferralConfig(d.referralConfig);
+          break;
         case "compounds":
           setCompounds(d.compounds);
           break;
@@ -171,6 +230,8 @@ export default function AdminApp({
           break;
         case "settings":
           setConfig(d.config);
+          setReferralConfig(d.referralConfig);
+          setSupportConfig(d.supportConfig);
           break;
       }
       showToast("Refreshed · " + TITLES[screen][0]);
@@ -181,6 +242,29 @@ export default function AdminApp({
     }
   }
 
+  // Live trips: poll for fresh ride data every 5s while the Live screen is open,
+  // so the board tracks trips in near-realtime without a manual refresh. Uses the
+  // existing refreshData server action (no client Firebase SDK needed).
+  useEffect(() => {
+    if (screen !== "live" || !configured) return;
+    let active = true;
+    const tick = async () => {
+      try {
+        const d = await refreshDataAction();
+        if (!active) return;
+        setRides(d.rides);
+        setLiveTickAt(Date.now());
+      } catch {
+        /* transient network error — the next tick retries */
+      }
+    };
+    const id = setInterval(tick, 5000);
+    return () => {
+      active = false;
+      clearInterval(id);
+    };
+  }, [screen, configured]);
+
   function goto(s: Screen) {
     setScreen(s);
     setDrawer(null);
@@ -188,6 +272,8 @@ export default function AdminApp({
   function openDrawer(type: DrawerState["type"], id: string) {
     setDrawer({ type, id });
     setRejectDraft("");
+    setNoteDraft("");
+    setResolveDraft("");
     setZoomImg(null);
   }
   const closeDrawer = () => setDrawer(null);
@@ -238,8 +324,151 @@ export default function AdminApp({
     showToast(active ? "Driver reactivated" : "Driver deactivated");
   }
 
+  // ---- case & discipline actions ----
+  const STRIKE_LIMIT = 3;
+
+  function submitCase() {
+    const ride = rides.find((r) => r.id.toLowerCase() === caseDraft.rideId.trim().toLowerCase());
+    if (!ride) {
+      showToast("Enter a valid Ride ID first");
+      return;
+    }
+    if (!caseDraft.complaint.trim()) {
+      showToast("Paste the passenger complaint");
+      return;
+    }
+    const id = "CS-" + Math.floor(1000 + Math.random() * 9000);
+    const newCase: Case = {
+      id,
+      rideId: ride.id,
+      passengerId: ride.riderId ?? "",
+      passengerName: ride.rider,
+      driverId: ride.driverId ?? "",
+      driverName: ride.driver ?? "—",
+      assignedAdminId: user.uid,
+      assignedAdminName: user.name,
+      source: caseDraft.source === "manual" ? "manual" : "email",
+      category: caseDraft.category as Case["category"],
+      priority: caseDraft.priority as Case["priority"],
+      status: "new",
+      passengerComplaintText: caseDraft.complaint.trim(),
+      resolutionSummary: null,
+      strikeIssued: false,
+      refundAmount: 0,
+      createdAt: "just now",
+      createdAtMs: Date.now(),
+      updatedAt: null,
+    };
+    setCases((l) => [newCase, ...l]);
+    setCaseForm(false);
+    setCaseDraft({ rideId: "", category: "driver_behavior", priority: "medium", source: "email", complaint: "" });
+    sync(() =>
+      createCaseAction({
+        rideId: newCase.rideId,
+        passengerId: newCase.passengerId,
+        driverId: newCase.driverId,
+        source: newCase.source,
+        category: newCase.category,
+        priority: newCase.priority,
+        passengerComplaintText: newCase.passengerComplaintText,
+      }),
+    );
+    showToast("Case " + id + " created");
+  }
+
+  function addNote(caseId: string) {
+    const text = noteDraft.trim();
+    if (!text) return;
+    const note: CaseNote = {
+      id: "n" + Date.now(),
+      caseId,
+      adminId: user.uid,
+      adminName: user.name,
+      noteText: text,
+      createdAt: "just now",
+      createdAtMs: Date.now(),
+    };
+    setCaseNotes((l) => [...l, note]);
+    setCases((l) => l.map((c) => (c.id === caseId && c.status === "new" ? { ...c, status: "under_investigation" } : c)));
+    setNoteDraft("");
+    sync(() => addCaseNoteAction(caseId, text));
+    showToast("Note added");
+  }
+
+  function changeCaseStatus(caseId: string, status: Case["status"]) {
+    setCases((l) => l.map((c) => (c.id === caseId ? { ...c, status } : c)));
+    sync(() => setCaseStatusAction(caseId, status));
+    showToast("Case marked " + status.replace("_", " "));
+  }
+
+  function changeCasePriority(caseId: string, priority: Case["priority"]) {
+    setCases((l) => l.map((c) => (c.id === caseId ? { ...c, priority } : c)));
+    sync(() => setCasePriorityAction(caseId, priority));
+  }
+
+  function resolveCurrentCase(caseId: string) {
+    const summary = resolveDraft.trim();
+    if (!summary) {
+      showToast("A resolution summary is required");
+      return;
+    }
+    setCases((l) => l.map((c) => (c.id === caseId ? { ...c, status: "resolved", resolutionSummary: summary } : c)));
+    setResolveDraft("");
+    sync(() => resolveCaseAction(caseId, summary));
+    showToast("Case resolved & archived");
+  }
+
+  function creditWallet(caseId: string, passengerId: string, passengerName: string) {
+    const amount = Number(creditDraft);
+    if (!passengerId) {
+      showToast("This case has no passenger to credit");
+      return;
+    }
+    if (!Number.isFinite(amount) || amount <= 0) {
+      showToast("Enter an amount greater than zero");
+      return;
+    }
+    // Optimistic: reflect the new balance on the rider and stamp the case.
+    setRiders((l) => l.map((r) => (r.uid === passengerId ? { ...r, walletBalance: r.walletBalance + amount } : r)));
+    setCases((l) => l.map((c) => (c.id === caseId ? { ...c, refundAmount: amount } : c)));
+    setCreditDraft("");
+    sync(() => creditWalletAction(caseId, passengerId, amount));
+    showToast("Credited E£" + amount + " to " + passengerName + "'s wallet");
+  }
+
+  function issueStrike(driverId: string, caseId?: string) {
+    if (!driverId) {
+      showToast("This case has no linked driver");
+      return;
+    }
+    setDrivers((l) =>
+      l.map((d) => {
+        if (d.uid !== driverId) return d;
+        const next = d.strikesCount + 1;
+        return { ...d, strikesCount: next, isBlocked: next >= STRIKE_LIMIT ? true : d.isBlocked };
+      }),
+    );
+    if (caseId) setCases((l) => l.map((c) => (c.id === caseId ? { ...c, strikeIssued: true } : c)));
+    sync(() => issueDriverStrikeAction(driverId, caseId));
+    const after = (drivers.find((d) => d.uid === driverId)?.strikesCount ?? 0) + 1;
+    showToast(after >= STRIKE_LIMIT ? "Strike issued · driver auto-suspended" : "Strike issued (" + after + "/" + STRIKE_LIMIT + ")");
+  }
+
+  function unblockDriver(driverId: string) {
+    setDrivers((l) => l.map((d) => (d.uid === driverId ? { ...d, isBlocked: false } : d)));
+    sync(() => unblockDriverAction(driverId));
+    showToast("Driver unblocked");
+  }
+
+  function resetStrikes(driverId: string) {
+    setDrivers((l) => l.map((d) => (d.uid === driverId ? { ...d, strikesCount: 0, isBlocked: false } : d)));
+    sync(() => resetDriverStrikesAction(driverId));
+    showToast("Strikes reset to 0");
+  }
+
   const pendingDrivers = drivers.filter((d) => d.approvalStatus === "pending").length;
   const subSettlements = settlements.filter((s) => s.status === "submitted").length;
+  const openCases = cases.filter((c) => c.status !== "resolved").length;
   const [title, subtitle] = TITLES[screen];
 
   const tabBtn = (active: boolean): CSSProperties => ({
@@ -320,7 +549,9 @@ export default function AdminApp({
                 ? subSettlements || null
                 : item.key === "drivers"
                   ? pendingDrivers || null
-                  : null;
+                  : item.key === "cases"
+                    ? openCases || null
+                    : null;
             return (
               <div
                 key={item.key}
@@ -524,10 +755,12 @@ export default function AdminApp({
             {screen === "dashboard" && renderDashboard()}
             {screen === "settlements" && renderSettlements()}
             {screen === "drivers" && renderDrivers()}
+            {screen === "cases" && renderCases()}
             {screen === "live" && renderLive()}
             {screen === "history" && renderHistory()}
             {screen === "riders" && renderRiders()}
             {screen === "offers" && renderOffers()}
+            {screen === "referrals" && renderReferrals()}
             {screen === "compounds" && renderCompounds()}
             {screen === "pricing" && renderPricing()}
             {screen === "settings" && renderSettings()}
@@ -537,6 +770,7 @@ export default function AdminApp({
 
       {drawer && renderDrawer()}
       {offerForm && renderOfferForm()}
+      {caseForm && renderCaseForm()}
       {toast && (
         <div
           style={{
@@ -984,6 +1218,8 @@ export default function AdminApp({
                     <div style={{ fontWeight: 700, fontSize: "13px", display: "flex", alignItems: "center", gap: "7px" }}>
                       {d.name}
                       {d.settlementBlocked && <Chip color={C.red} label="Blocked" />}
+                      {d.isBlocked && <Chip color={C.red} label="Suspended" />}
+                      {!d.isBlocked && d.strikesCount > 0 && <Chip color={C.amber} label={d.strikesCount + " ⚠"} />}
                     </div>
                     <div style={{ fontSize: "11px", color: "#6E6E6E" }}>
                       {d.phone} · {d.compound}
@@ -1032,6 +1268,341 @@ export default function AdminApp({
     );
   }
 
+  function renderCases() {
+    const pcol: Record<string, string> = { low: C.grey, medium: C.bright, high: C.amber, critical: C.red };
+    const scol: Record<string, string> = { new: C.bright, under_investigation: C.amber, resolved: C.green };
+    const tabs: [string, string][] = [
+      ["open", "Open"],
+      ["new", "New"],
+      ["under_investigation", "Investigating"],
+      ["resolved", "Resolved"],
+      ["all", "All"],
+    ];
+    const count = (k: string) =>
+      k === "all" ? cases.length : k === "open" ? cases.filter((c) => c.status !== "resolved").length : cases.filter((c) => c.status === k).length;
+    const list = cases.filter((c) => (caseTab === "all" ? true : caseTab === "open" ? c.status !== "resolved" : c.status === caseTab));
+    return (
+      <div>
+        <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "9px", marginBottom: "16px" }}>
+          {tabs.map(([k, l]) => {
+            const active = caseTab === k;
+            return (
+              <div key={k} onClick={() => setCaseTab(k)} style={tabBtn(active)}>
+                {l}
+                <span style={tabCount(active)}>{count(k)}</span>
+              </div>
+            );
+          })}
+          <div style={{ flex: 1 }} />
+          <button
+            onClick={() => {
+              setCaseDraft({ rideId: "", category: "driver_behavior", priority: "medium", source: "email", complaint: "" });
+              setCaseForm(true);
+            }}
+            style={{ display: "flex", alignItems: "center", gap: "7px", padding: "9px 16px", borderRadius: "10px", border: "none", background: GRAD, color: "#fff", fontWeight: 700, fontSize: "12.5px", cursor: "pointer", boxShadow: "0 4px 14px " + hexA(C.bright, 0.3) }}
+          >
+            <Icon name="plus" size={16} color="#fff" />
+            New case
+          </button>
+        </div>
+        <div style={{ ...CARD, overflow: "hidden" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1.4fr 1.2fr 1fr 1fr 1.1fr", gap: "12px", padding: "11px 18px", borderBottom: "1px solid #2A2A2A", ...HEAD_CELL }}>
+            <span>Case · Ride</span>
+            <span>Passenger / Driver</span>
+            <span>Category</span>
+            <span>Priority</span>
+            <span>Status</span>
+            <span>Created</span>
+          </div>
+          {list.map((c) => (
+            <div
+              key={c.id}
+              onClick={() => openDrawer("case", c.id)}
+              style={{ display: "grid", gridTemplateColumns: "1fr 1.4fr 1.2fr 1fr 1fr 1.1fr", alignItems: "center", gap: "12px", padding: "13px 18px", borderBottom: "1px solid #1F1F1F", cursor: "pointer" }}
+            >
+              <div>
+                <div style={{ fontWeight: 700, fontSize: "13px" }}>{c.id}</div>
+                <div style={{ fontSize: "11px", color: "#6E6E6E", fontFamily: "var(--font-mono)" }}>{c.rideId || "—"}</div>
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: "12.5px", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.passengerName}</div>
+                <div style={{ fontSize: "11px", color: "#6E6E6E", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>vs {c.driverName}</div>
+              </div>
+              <div style={{ fontSize: "12px", color: "#C5C5C5" }}>{catLabel(c.category)}</div>
+              <div>
+                <Chip color={pcol[c.priority]} label={prioLabel(c.priority)} dot />
+              </div>
+              <div>
+                <Chip color={scol[c.status]} label={statusLabel(c.status)} />
+              </div>
+              <div style={{ fontSize: "11.5px", color: "#8A8A8A" }}>{c.createdAt}</div>
+            </div>
+          ))}
+          {list.length === 0 && <div style={{ padding: "48px", textAlign: "center", color: "#6E6E6E", fontSize: "13px" }}>No cases in this view.</div>}
+        </div>
+      </div>
+    );
+  }
+
+  function renderCaseForm() {
+    const ride = rides.find((r) => r.id.toLowerCase() === caseDraft.rideId.trim().toLowerCase());
+    const fieldLabel: CSSProperties = { fontSize: "11px", color: "#6E6E6E", fontWeight: 700, textTransform: "uppercase", letterSpacing: ".4px", marginBottom: "7px", display: "block" };
+    const inputStyle: CSSProperties = { width: "100%", height: "40px", background: "#121212", border: "1px solid #333", borderRadius: "10px", padding: "0 12px", color: "#fff", fontSize: "13px", outline: "none" };
+    const selectStyle: CSSProperties = { ...inputStyle, appearance: "none" };
+    return (
+      <div style={{ position: "fixed", inset: 0, zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: "24px" }}>
+        <div onClick={() => setCaseForm(false)} style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,.6)" }} />
+        <div style={{ position: "relative", width: "520px", maxWidth: "96vw", maxHeight: "92vh", overflowY: "auto", background: "#161616", border: "1px solid #2A2A2A", borderRadius: "16px", boxShadow: "0 24px 70px rgba(0,0,0,.6)" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "18px 22px", borderBottom: "1px solid #262626" }}>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: "15px" }}>Log a new case</div>
+              <div style={{ fontSize: "11.5px", color: "#6E6E6E", marginTop: "2px" }}>Paste an email complaint and link it to a ride</div>
+            </div>
+            <button onClick={() => setCaseForm(false)} style={{ width: "32px", height: "32px", borderRadius: "9px", background: "#1E1E1E", border: "1px solid #333", color: "#A0A0A0", cursor: "pointer", fontSize: "16px" }}>✕</button>
+          </div>
+          <div style={{ padding: "22px" }}>
+            <label style={fieldLabel}>Ride ID</label>
+            <input
+              value={caseDraft.rideId}
+              onChange={(e) => setCaseDraft((d) => ({ ...d, rideId: e.target.value }))}
+              placeholder="e.g. RD-8853"
+              style={{ ...inputStyle, marginBottom: "10px", borderColor: caseDraft.rideId && !ride ? hexA(C.red, 0.5) : "#333" }}
+            />
+            {caseDraft.rideId.trim() !== "" && (
+              ride ? (
+                <div style={{ background: "#1E1E1E", border: "1px solid #2A2A2A", borderRadius: "11px", padding: "12px 14px", marginBottom: "16px", display: "flex", gap: "18px" }}>
+                  <div>
+                    <div style={{ fontSize: "10.5px", color: "#6E6E6E", fontWeight: 700, marginBottom: "3px" }}>PASSENGER</div>
+                    <div style={{ fontSize: "12.5px", fontWeight: 600 }}>{ride.rider}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: "10.5px", color: "#6E6E6E", fontWeight: 700, marginBottom: "3px" }}>DRIVER</div>
+                    <div style={{ fontSize: "12.5px", fontWeight: 600 }}>{ride.driver ?? "—"}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: "10.5px", color: "#6E6E6E", fontWeight: 700, marginBottom: "3px" }}>COMPOUND</div>
+                    <div style={{ fontSize: "12.5px", fontWeight: 600 }}>{ride.compound}</div>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ fontSize: "12px", color: "#F87171", marginBottom: "16px" }}>No ride found with that ID.</div>
+              )
+            )}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", marginBottom: "16px" }}>
+              <div>
+                <label style={fieldLabel}>Category</label>
+                <select value={caseDraft.category} onChange={(e) => setCaseDraft((d) => ({ ...d, category: e.target.value }))} style={selectStyle}>
+                  {CASE_CATEGORIES.map(([k, l]) => (
+                    <option key={k} value={k}>{l}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label style={fieldLabel}>Priority</label>
+                <select value={caseDraft.priority} onChange={(e) => setCaseDraft((d) => ({ ...d, priority: e.target.value }))} style={selectStyle}>
+                  {CASE_PRIORITIES.map(([k, l]) => (
+                    <option key={k} value={k}>{l}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <label style={fieldLabel}>Passenger email / complaint</label>
+            <textarea
+              value={caseDraft.complaint}
+              onChange={(e) => setCaseDraft((d) => ({ ...d, complaint: e.target.value }))}
+              placeholder="Paste the raw email body or describe the complaint…"
+              style={{ width: "100%", height: "130px", background: "#121212", border: "1px solid #333", borderRadius: "10px", padding: "10px 12px", color: "#fff", fontSize: "13px", lineHeight: 1.5, resize: "none", outline: "none", marginBottom: "18px" }}
+            />
+            <div style={{ display: "flex", gap: "10px" }}>
+              <button onClick={() => setCaseForm(false)} style={{ flex: 1, padding: "12px", borderRadius: "10px", border: "1px solid #333", background: "#1E1E1E", color: "#C5C5C5", fontWeight: 700, fontSize: "13px", cursor: "pointer" }}>Cancel</button>
+              <button onClick={submitCase} disabled={!ride || !caseDraft.complaint.trim()} style={{ flex: 2, padding: "12px", borderRadius: "10px", border: "none", background: !ride || !caseDraft.complaint.trim() ? "#2A2A2A" : GRAD, color: "#fff", fontWeight: 700, fontSize: "13px", cursor: !ride || !caseDraft.complaint.trim() ? "default" : "pointer", opacity: !ride || !caseDraft.complaint.trim() ? 0.6 : 1 }}>Create case</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  function renderCaseDrawer() {
+    const c = cases.find((x) => x.id === drawer!.id);
+    if (!c) return null;
+    const pcol: Record<string, string> = { low: C.grey, medium: C.bright, high: C.amber, critical: C.red };
+    const scol: Record<string, string> = { new: C.bright, under_investigation: C.amber, resolved: C.green };
+    const driver = drivers.find((d) => d.uid === c.driverId);
+    const notes = caseNotes.filter((n) => n.caseId === c.id).sort((a, b) => (a.createdAtMs ?? 0) - (b.createdAtMs ?? 0));
+    const rowCell: CSSProperties = { display: "flex", justifyContent: "space-between", padding: "10px 14px", fontSize: "12.5px" };
+    const resolved = c.status === "resolved";
+    const sectionLabel: CSSProperties = { fontSize: "11px", color: "#6E6E6E", fontWeight: 700, textTransform: "uppercase", letterSpacing: ".5px", marginBottom: "9px" };
+    return (
+      <>
+        {drawerHeader(c.id + " · " + catLabel(c.category), c.rideId + " · " + c.createdAt)}
+        <div style={{ flex: 1, overflowY: "auto", padding: "22px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "18px", flexWrap: "wrap" }}>
+            <Chip color={scol[c.status]} label={statusLabel(c.status)} />
+            <Chip color={pcol[c.priority]} label={prioLabel(c.priority) + " priority"} dot />
+            <Chip color={c.source === "rider" ? C.bright : C.grey} label={c.source === "rider" ? "Rider-reported" : c.source === "manual" ? "Manual" : "Email"} />
+            {c.strikeIssued && <Chip color={C.red} label="Strike issued" />}
+          </div>
+
+          <div style={{ background: "#1E1E1E", border: "1px solid #2A2A2A", borderRadius: "12px", overflow: "hidden", marginBottom: "18px" }}>
+            <div style={{ ...rowCell, borderBottom: "1px solid #262626" }}>
+              <span style={{ color: "#6E6E6E" }}>Passenger</span>
+              <span style={{ fontWeight: 600 }}>{c.passengerName}</span>
+            </div>
+            <div style={{ ...rowCell, borderBottom: "1px solid #262626" }}>
+              <span style={{ color: "#6E6E6E" }}>Driver</span>
+              <span style={{ fontWeight: 600, display: "flex", alignItems: "center", gap: "7px" }}>
+                {c.driverName}
+                {driver && driver.isBlocked && <Chip color={C.red} label="Suspended" />}
+              </span>
+            </div>
+            <div style={rowCell}>
+              <span style={{ color: "#6E6E6E" }}>Assigned</span>
+              <span>{c.assignedAdminName ?? "Unassigned"}</span>
+            </div>
+          </div>
+
+          <div style={sectionLabel}>Passenger complaint</div>
+          <div style={{ background: "#121212", border: "1px solid #262626", borderRadius: "11px", padding: "13px 15px", marginBottom: "18px", fontSize: "12.5px", lineHeight: 1.6, color: "#D5D5D5", whiteSpace: "pre-wrap" }}>
+            {c.passengerComplaintText || "—"}
+          </div>
+
+          {c.category === "route_dispute" && (
+            <div style={{ background: "rgba(46,139,255,.08)", border: "1px solid rgba(46,139,255,.25)", borderRadius: "11px", padding: "12px 14px", marginBottom: "18px", fontSize: "12px", color: "#9CC4FF", lineHeight: 1.5 }}>
+              🗺 Route comparison map is not available yet — the app does not persist per-ride GPS telemetry.
+              Add ride-path logging to the driver app to enable the actual-vs-optimal route overlay.
+            </div>
+          )}
+
+          {/* Priority control */}
+          <div style={sectionLabel}>Priority</div>
+          <div style={{ display: "flex", gap: "7px", marginBottom: "18px" }}>
+            {CASE_PRIORITIES.map(([k, l]) => {
+              const active = c.priority === k;
+              return (
+                <button
+                  key={k}
+                  onClick={() => !resolved && changeCasePriority(c.id, k as Case["priority"])}
+                  disabled={resolved}
+                  style={{ flex: 1, padding: "8px", borderRadius: "9px", border: "1px solid " + (active ? hexA(pcol[k], 0.5) : "#2A2A2A"), background: active ? hexA(pcol[k], 0.14) : "#1A1A1A", color: active ? pcol[k] : "#8A8A8A", fontWeight: 700, fontSize: "11.5px", cursor: resolved ? "default" : "pointer", opacity: resolved ? 0.5 : 1 }}
+                >
+                  {l}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Timeline */}
+          <div style={sectionLabel}>Investigation timeline</div>
+          <div style={{ marginBottom: "14px" }}>
+            {notes.length === 0 && <div style={{ fontSize: "12px", color: "#6E6E6E", padding: "6px 0 12px" }}>No notes yet.</div>}
+            {notes.map((n) => (
+              <div key={n.id} style={{ display: "flex", gap: "11px", marginBottom: "12px" }}>
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+                  <div style={{ width: "9px", height: "9px", borderRadius: "50%", background: C.bright, flexShrink: 0, marginTop: "4px" }} />
+                  <div style={{ flex: 1, width: "1px", background: "#2A2A2A", marginTop: "3px" }} />
+                </div>
+                <div style={{ flex: 1, background: "#1A1A1A", border: "1px solid #262626", borderRadius: "10px", padding: "10px 13px" }}>
+                  <div style={{ fontSize: "12.5px", color: "#D5D5D5", lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{n.noteText}</div>
+                  <div style={{ fontSize: "10.5px", color: "#6E6E6E", marginTop: "6px" }}>{n.adminName} · {n.createdAt}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+          {!resolved && (
+            <div style={{ display: "flex", gap: "8px", marginBottom: "20px" }}>
+              <input
+                value={noteDraft}
+                onChange={(e) => setNoteDraft(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") addNote(c.id); }}
+                placeholder="Add an investigation note…"
+                style={{ flex: 1, height: "40px", background: "#121212", border: "1px solid #333", borderRadius: "10px", padding: "0 12px", color: "#fff", fontSize: "12.5px", outline: "none" }}
+              />
+              <button onClick={() => addNote(c.id)} disabled={!noteDraft.trim()} style={{ padding: "0 16px", borderRadius: "10px", border: "none", background: noteDraft.trim() ? C.bright : "#2A2A2A", color: "#fff", fontWeight: 700, fontSize: "12.5px", cursor: noteDraft.trim() ? "pointer" : "default" }}>Add</button>
+            </div>
+          )}
+
+          {/* Driver disciplinary action */}
+          {c.driverId && !resolved && (
+            <>
+              <div style={sectionLabel}>Driver discipline</div>
+              <div style={{ background: "#1E1E1E", border: "1px solid #2A2A2A", borderRadius: "12px", padding: "13px 15px", marginBottom: "18px" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "11px" }}>
+                  <div style={{ fontSize: "12.5px", color: "#C5C5C5" }}>
+                    {c.driverName} · <span style={{ fontWeight: 700, color: (driver?.strikesCount ?? 0) > 0 ? C.amber : "#8A8A8A" }}>{driver?.strikesCount ?? 0}/{STRIKE_LIMIT} strikes</span>
+                  </div>
+                  {driver?.isBlocked && <Chip color={C.red} label="Suspended" />}
+                </div>
+                <button
+                  onClick={() => issueStrike(c.driverId, c.id)}
+                  disabled={c.strikeIssued}
+                  style={{ width: "100%", padding: "11px", borderRadius: "10px", border: "1px solid rgba(239,68,68,.4)", background: c.strikeIssued ? "#2A2A2A" : "rgba(239,68,68,.12)", color: c.strikeIssued ? "#6E6E6E" : "#F87171", fontWeight: 700, fontSize: "12.5px", cursor: c.strikeIssued ? "default" : "pointer" }}
+                >
+                  {c.strikeIssued ? "Strike already issued for this case" : "Issue driver strike"}
+                </button>
+              </div>
+            </>
+          )}
+
+          {/* Wallet compensation — credits the passenger's spendable balance */}
+          <div style={{ background: "#151515", border: "1px solid #2A2A2A", borderRadius: "11px", padding: "13px 15px" }}>
+            <div style={{ fontSize: "11px", color: C.grey, fontWeight: 700, marginBottom: "8px", letterSpacing: ".3px" }}>WALLET COMPENSATION</div>
+            <div style={{ fontSize: "12px", color: "#B9B9B9", marginBottom: "10px" }}>
+              Passenger balance:{" "}
+              <span style={{ color: "#fff", fontWeight: 700 }}>{money(riders.find((r) => r.uid === c.passengerId)?.walletBalance ?? 0)}</span>
+              {c.refundAmount > 0 && <span style={{ color: "#8FE3B5" }}> · {money(c.refundAmount)} credited for this case</span>}
+            </div>
+            <div style={{ display: "flex", gap: "8px" }}>
+              <input
+                type="number"
+                min={0}
+                value={creditDraft}
+                onChange={(e) => setCreditDraft(e.target.value)}
+                placeholder="Amount (E£)"
+                style={{ flex: 1, background: "#121212", border: "1px solid #333", borderRadius: "10px", padding: "10px 12px", color: "#fff", fontSize: "12.5px", outline: "none" }}
+              />
+              <button
+                onClick={() => creditWallet(c.id, c.passengerId, c.passengerName)}
+                disabled={!(Number(creditDraft) > 0) || !c.passengerId}
+                style={{ padding: "10px 16px", borderRadius: "10px", border: "none", background: Number(creditDraft) > 0 && c.passengerId ? "linear-gradient(135deg,#0f8f52,#1DB76A)" : "#2A2A2A", color: "#fff", fontWeight: 700, fontSize: "12.5px", cursor: Number(creditDraft) > 0 && c.passengerId ? "pointer" : "default", whiteSpace: "nowrap" }}
+              >
+                Credit to wallet
+              </button>
+            </div>
+          </div>
+
+          {/* Status / resolution actions */}
+          {resolved ? (
+            <div style={{ background: "rgba(29,183,106,.1)", border: "1px solid rgba(29,183,106,.3)", borderRadius: "11px", padding: "13px 15px" }}>
+              <div style={{ fontSize: "11px", color: "#8FE3B5", fontWeight: 700, marginBottom: "5px" }}>RESOLUTION</div>
+              <div style={{ fontSize: "12.5px", color: "#CDE8D8", lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{c.resolutionSummary}</div>
+            </div>
+          ) : (
+            <>
+              <div style={sectionLabel}>Resolve case</div>
+              <textarea
+                value={resolveDraft}
+                onChange={(e) => setResolveDraft(e.target.value)}
+                placeholder="Resolution summary (required to resolve)…"
+                style={{ width: "100%", height: "70px", background: "#121212", border: "1px solid #333", borderRadius: "10px", padding: "10px 12px", color: "#fff", fontSize: "12.5px", lineHeight: 1.5, resize: "none", outline: "none", marginBottom: "10px" }}
+              />
+              <div style={{ display: "flex", gap: "10px" }}>
+                {c.status === "new" && (
+                  <button onClick={() => changeCaseStatus(c.id, "under_investigation")} style={{ flex: 1, padding: "12px", borderRadius: "10px", border: "1px solid " + hexA(C.amber, 0.4), background: hexA(C.amber, 0.12), color: C.amber, fontWeight: 700, fontSize: "12.5px", cursor: "pointer" }}>
+                    Start investigation
+                  </button>
+                )}
+                <button onClick={() => resolveCurrentCase(c.id)} disabled={!resolveDraft.trim()} style={{ flex: 1, padding: "12px", borderRadius: "10px", border: "none", background: resolveDraft.trim() ? "linear-gradient(135deg,#0f8f52,#1DB76A)" : "#2A2A2A", color: "#fff", fontWeight: 700, fontSize: "12.5px", cursor: resolveDraft.trim() ? "pointer" : "default", opacity: resolveDraft.trim() ? 1 : 0.6 }}>
+                  Resolve case
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      </>
+    );
+  }
+
   function renderLive() {
     const live = rides.filter((r) => ["requested", "accepted", "enRoute", "arrived", "inProgress"].includes(r.status));
     const scol: Record<string, string> = { requested: C.bright, accepted: C.amber, enRoute: C.amber, arrived: C.amber, inProgress: C.amber };
@@ -1066,6 +1637,13 @@ export default function AdminApp({
           >
             <span style={{ width: "7px", height: "7px", borderRadius: "50%", background: "#1DB76A", boxShadow: "0 0 7px #1DB76A" }} />
             {live.length} rides in progress · Cairo
+            <span style={{ color: C.grey, fontWeight: 600, fontSize: "11px" }}>
+              {configured
+                ? liveTickAt
+                  ? " · LIVE · updated " + Math.max(0, Math.round((Date.now() - liveTickAt) / 1000)) + "s ago"
+                  : " · connecting…"
+                : " · demo"}
+            </span>
           </div>
           {live.map((r, i) => (
             <div
@@ -1218,16 +1796,18 @@ export default function AdminApp({
   }
 
   function renderRiders() {
-    const cols = "2fr 1.5fr 1.4fr 1fr 0.8fr 1fr";
+    const cols = "1.8fr 1.3fr 1.2fr 0.9fr 0.9fr 0.7fr 0.9fr 0.9fr";
     return (
       <div style={{ ...CARD, overflow: "hidden" }}>
         <div style={{ display: "grid", gridTemplateColumns: cols, gap: "12px", padding: "11px 18px", borderBottom: "1px solid #2A2A2A", ...HEAD_CELL }}>
           <span>Rider</span>
           <span>Phone</span>
           <span>Compound</span>
+          <span>Invite code</span>
           <span>Joined</span>
           <span>Rides</span>
           <span>Total spent</span>
+          <span>Wallet</span>
         </div>
         {riders.map((r) => (
           <div key={r.uid} style={{ display: "grid", gridTemplateColumns: cols, alignItems: "center", gap: "12px", padding: "13px 18px", borderBottom: "1px solid #1F1F1F" }}>
@@ -1235,14 +1815,20 @@ export default function AdminApp({
               <div style={avatar(r.name, 38)}>{initials(r.name)}</div>
               <div style={{ minWidth: 0 }}>
                 <div style={{ fontWeight: 700, fontSize: "13px" }}>{r.name}</div>
-                <div style={{ fontSize: "11px", color: "#6E6E6E" }}>{r.language === "ar" ? "عربي" : "English"}</div>
+                <div style={{ fontSize: "11px", color: "#6E6E6E" }}>
+                  {r.referredByName ? `invited by ${r.referredByName}` : r.language === "ar" ? "عربي" : "English"}
+                </div>
               </div>
             </div>
             <div style={{ fontSize: "12.5px", color: "#A0A0A0", fontFamily: "var(--font-mono)" }}>{r.phone}</div>
             <div style={{ fontSize: "12.5px", color: "#A0A0A0" }}>{r.compound}</div>
+            <div style={{ fontSize: "12px", color: "#A0A0A0", fontFamily: "var(--font-mono)", letterSpacing: ".5px" }}>{r.referralCode || "—"}</div>
             <div style={{ fontSize: "12px", color: "#6E6E6E" }}>{r.createdAt}</div>
             <div style={{ fontSize: "13px", fontWeight: 600 }}>{r.rides}</div>
             <div style={{ fontFamily: "var(--font-mono)", fontWeight: 600, fontSize: "12.5px", color: "#1DB76A" }}>{money(r.spent)}</div>
+            <div style={{ fontFamily: "var(--font-mono)", fontWeight: 600, fontSize: "12.5px", color: r.walletBalance > 0 ? C.bright : "#6E6E6E" }}>
+              {r.walletBalance > 0 ? money(r.walletBalance) : "—"}
+            </div>
           </div>
         ))}
       </div>
@@ -1336,6 +1922,77 @@ export default function AdminApp({
                 <Chip color={r.status === "applied" ? C.green : C.grey} label={r.status} />
               </span>
               <span style={{ fontSize: "11.5px", color: "#6E6E6E" }}>{r.createdAt}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  function renderReferrals() {
+    const cols = "1.4fr 1.4fr 0.9fr 1fr 0.9fr 1.1fr";
+    const rewarded = referrals.filter((r) => r.status === "rewarded");
+    // Only settled referrals have actually cost anything — pending ones are a
+    // liability, not a spend, so the two are counted separately.
+    const paidOut = rewarded.reduce((s, r) => s + r.inviterReward + r.inviteeReward, 0);
+    const pendingCount = referrals.length - rewarded.length;
+    const owedIfAllConvert = pendingCount * (referralConfig.inviterReward + referralConfig.inviteeReward);
+
+    const stat = (label: string, value: string, color: string) => (
+      <div style={{ ...CARD, padding: "16px 18px" }}>
+        <div style={{ fontSize: "11px", color: "#6E6E6E", fontWeight: 700, textTransform: "uppercase", letterSpacing: ".4px" }}>{label}</div>
+        <div style={{ fontSize: "22px", fontWeight: 800, marginTop: "7px", color, fontFamily: "var(--font-mono)" }}>{value}</div>
+      </div>
+    );
+
+    return (
+      <div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: "12px", marginBottom: "14px" }}>
+          {stat("Invites sent", String(referrals.length), "#fff")}
+          {stat("Converted", String(rewarded.length), C.green)}
+          {stat("Paid out", money(paidOut), C.green)}
+          {stat("Pending liability", money(owedIfAllConvert), C.amber)}
+        </div>
+
+        {!referralConfig.enabled && (
+          <div style={{ background: "rgba(255,167,38,.1)", border: "1px solid rgba(255,167,38,.3)", borderRadius: "12px", padding: "13px 16px", marginBottom: "14px", fontSize: "12.5px", color: "#FFD08A", fontWeight: 600 }}>
+            ⚠ Referrals are disabled in Settings — new invites are still recorded but nothing is paid out.
+          </div>
+        )}
+
+        <div style={{ ...CARD, overflow: "hidden" }}>
+          <div style={{ display: "grid", gridTemplateColumns: cols, gap: "12px", padding: "11px 18px", borderBottom: "1px solid #2A2A2A", ...HEAD_CELL }}>
+            <span>Inviter</span>
+            <span>Invited friend</span>
+            <span>Code</span>
+            <span>Status</span>
+            <span>Reward</span>
+            <span>Invited</span>
+          </div>
+          {referrals.length === 0 && (
+            <div style={{ padding: "34px", textAlign: "center", color: "#6E6E6E", fontSize: "13px" }}>No invites yet.</div>
+          )}
+          {referrals.map((r) => (
+            <div key={r.id} style={{ display: "grid", gridTemplateColumns: cols, alignItems: "center", gap: "12px", padding: "13px 18px", borderBottom: "1px solid #1F1F1F" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "10px", minWidth: 0 }}>
+                <div style={avatar(r.inviterName, 32)}>{initials(r.inviterName)}</div>
+                <div style={{ fontWeight: 600, fontSize: "12.5px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.inviterName}</div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: "10px", minWidth: 0 }}>
+                <div style={avatar(r.inviteeName, 32)}>{initials(r.inviteeName)}</div>
+                <div style={{ fontWeight: 600, fontSize: "12.5px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.inviteeName}</div>
+              </div>
+              <div style={{ fontFamily: "var(--font-mono)", fontSize: "12px", color: "#A0A0A0", letterSpacing: ".5px" }}>{r.code}</div>
+              <div>
+                <Chip
+                  label={r.status === "rewarded" ? "Rewarded" : "Awaiting 1st ride"}
+                  color={r.status === "rewarded" ? C.green : C.amber}
+                />
+              </div>
+              <div style={{ fontFamily: "var(--font-mono)", fontSize: "12.5px", fontWeight: 600, color: r.status === "rewarded" ? C.green : "#6E6E6E" }}>
+                {r.status === "rewarded" ? money(r.inviterReward + r.inviteeReward) : "—"}
+              </div>
+              <div style={{ fontSize: "12px", color: "#6E6E6E" }}>{r.rewardedAt ?? r.createdAt}</div>
             </div>
           ))}
         </div>
@@ -1564,6 +2221,105 @@ export default function AdminApp({
             Save config
           </button>
         </div>
+
+        {/* ── Referral rewards ── */}
+        <div style={{ ...CARD, padding: "22px", marginTop: "16px" }}>
+          <div style={{ fontWeight: 700, fontSize: "14px", marginBottom: "4px" }}>Referral rewards</div>
+          <div style={{ fontSize: "12px", color: "#6E6E6E", marginBottom: "20px" }}>
+            Paid to both sides only after the invited rider completes their first ride. The invite screen advertises these exact
+            amounts, and already-rewarded referrals keep what they were paid.
+          </div>
+          <label style={{ display: "flex", alignItems: "center", gap: "10px", cursor: "pointer", marginBottom: "18px" }}>
+            <input
+              type="checkbox"
+              checked={referralConfig.enabled}
+              onChange={(e) => setReferralConfig((s) => ({ ...s, enabled: e.target.checked }))}
+              style={{ width: "16px", height: "16px", accentColor: "#2E8BFF", cursor: "pointer" }}
+            />
+            <span style={{ fontSize: "13px", fontWeight: 600 }}>Referral programme enabled</span>
+          </label>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px" }}>
+            <div>
+              <label style={labelStyle}>Inviter reward (EGP)</label>
+              <input
+                type="number"
+                min={0}
+                value={referralConfig.inviterReward}
+                onChange={(e) => setReferralConfig((s) => ({ ...s, inviterReward: Number(e.target.value) }))}
+                style={{ ...inputStyle, fontFamily: "var(--font-mono)" }}
+              />
+            </div>
+            <div>
+              <label style={labelStyle}>Invited friend reward (EGP)</label>
+              <input
+                type="number"
+                min={0}
+                value={referralConfig.inviteeReward}
+                onChange={(e) => setReferralConfig((s) => ({ ...s, inviteeReward: Number(e.target.value) }))}
+                style={{ ...inputStyle, fontFamily: "var(--font-mono)" }}
+              />
+            </div>
+          </div>
+          <button
+            onClick={() => {
+              sync(() => saveReferralConfigAction(referralConfig));
+              showToast("Referral rewards saved");
+            }}
+            style={{ marginTop: "20px", padding: "11px 22px", borderRadius: "10px", border: "none", background: GRAD, color: "#fff", fontWeight: 700, fontSize: "13px", cursor: "pointer", boxShadow: "0 4px 14px rgba(46,139,255,.3)" }}
+          >
+            Save rewards
+          </button>
+        </div>
+
+        {/* ── Emergency & support ── */}
+        <div style={{ ...CARD, padding: "22px", marginTop: "16px" }}>
+          <div style={{ fontWeight: 700, fontSize: "14px", marginBottom: "4px" }}>Emergency &amp; support contacts</div>
+          <div style={{ fontSize: "12px", color: "#6E6E6E", marginBottom: "20px" }}>
+            The rider app&apos;s Safety screen dials the emergency number from its SOS button.
+          </div>
+          {!supportConfig.emergencyPhone && (
+            <div style={{ background: "rgba(255,167,38,.1)", border: "1px solid rgba(255,167,38,.3)", borderRadius: "10px", padding: "11px 14px", marginBottom: "18px", fontSize: "12.5px", color: "#FFD08A", fontWeight: 600 }}>
+              ⚠ No emergency number set — the SOS button currently falls back to 122.
+            </div>
+          )}
+          <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px" }}>
+              <div>
+                <label style={labelStyle}>Emergency number (SOS)</label>
+                <input
+                  value={supportConfig.emergencyPhone}
+                  onChange={(e) => setSupportConfig((s) => ({ ...s, emergencyPhone: e.target.value }))}
+                  style={{ ...inputStyle, fontFamily: "var(--font-mono)" }}
+                />
+              </div>
+              <div>
+                <label style={labelStyle}>Support number</label>
+                <input
+                  value={supportConfig.supportPhone}
+                  onChange={(e) => setSupportConfig((s) => ({ ...s, supportPhone: e.target.value }))}
+                  style={{ ...inputStyle, fontFamily: "var(--font-mono)" }}
+                />
+              </div>
+            </div>
+            <div>
+              <label style={labelStyle}>Support email</label>
+              <input
+                value={supportConfig.supportEmail}
+                onChange={(e) => setSupportConfig((s) => ({ ...s, supportEmail: e.target.value }))}
+                style={{ ...inputStyle, fontFamily: "var(--font-mono)" }}
+              />
+            </div>
+          </div>
+          <button
+            onClick={() => {
+              sync(() => saveSupportConfigAction(supportConfig));
+              showToast("Support contacts saved · live in the rider app");
+            }}
+            style={{ marginTop: "20px", padding: "11px 22px", borderRadius: "10px", border: "none", background: GRAD, color: "#fff", fontWeight: 700, fontSize: "13px", cursor: "pointer", boxShadow: "0 4px 14px rgba(46,139,255,.3)" }}
+          >
+            Save contacts
+          </button>
+        </div>
       </div>
     );
   }
@@ -1593,6 +2349,7 @@ export default function AdminApp({
           {drawer.type === "settlement" && renderSettlementDrawer()}
           {drawer.type === "driver" && renderDriverDrawer()}
           {drawer.type === "ride" && renderRideDrawer()}
+          {drawer.type === "case" && renderCaseDrawer()}
         </div>
         {zoomImg && (
           <div onClick={() => setZoomImg(null)} style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,.85)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "zoom-out", zIndex: 5, padding: "40px" }}>
@@ -1775,6 +2532,32 @@ export default function AdminApp({
             </div>
           )}
 
+          {/* Disciplinary strikes */}
+          <div style={{ background: dr.isBlocked ? "rgba(239,68,68,.08)" : "#1E1E1E", border: "1px solid " + (dr.isBlocked ? "rgba(239,68,68,.3)" : "#2A2A2A"), borderRadius: "12px", padding: "13px 15px", marginBottom: "18px" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "11px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <span style={{ fontSize: "12px", color: "#A0A0A0", fontWeight: 600 }}>Disciplinary strikes</span>
+                <span style={{ fontSize: "13px", fontWeight: 800, color: dr.strikesCount > 0 ? C.amber : "#8A8A8A" }}>{dr.strikesCount}/3</span>
+              </div>
+              {dr.isBlocked && <Chip color={C.red} label="Suspended" />}
+            </div>
+            <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+              <button onClick={() => issueStrike(dr.uid)} style={{ flex: "1 1 auto", padding: "9px 12px", borderRadius: "9px", border: "1px solid rgba(239,68,68,.4)", background: "rgba(239,68,68,.1)", color: "#F87171", fontWeight: 700, fontSize: "12px", cursor: "pointer" }}>
+                Issue strike
+              </button>
+              {dr.isBlocked && (
+                <button onClick={() => unblockDriver(dr.uid)} style={{ flex: "1 1 auto", padding: "9px 12px", borderRadius: "9px", border: "none", background: "linear-gradient(135deg,#0f8f52,#1DB76A)", color: "#fff", fontWeight: 700, fontSize: "12px", cursor: "pointer" }}>
+                  Unblock driver
+                </button>
+              )}
+              {dr.strikesCount > 0 && (
+                <button onClick={() => resetStrikes(dr.uid)} style={{ flex: "1 1 auto", padding: "9px 12px", borderRadius: "9px", border: "1px solid #333", background: "#1A1A1A", color: "#C5C5C5", fontWeight: 700, fontSize: "12px", cursor: "pointer" }}>
+                  Reset strikes
+                </button>
+              )}
+            </div>
+          </div>
+
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "10px", marginBottom: "18px" }}>
             <div style={stat}>
               <div style={{ fontSize: "18px", fontWeight: 800 }}>
@@ -1811,6 +2594,12 @@ export default function AdminApp({
               </span>
             </div>
             <div style={{ ...rowCell, borderBottom: "1px solid #262626" }}>
+              <span style={{ color: "#6E6E6E" }}>Date of birth · City</span>
+              <span>
+                {dr.dob || "—"} · {dr.city || "—"}
+              </span>
+            </div>
+            <div style={{ ...rowCell, borderBottom: "1px solid #262626" }}>
               <span style={{ color: "#6E6E6E" }}>Last settlement</span>
               <span>{dr.lastSettlementAt || "—"}</span>
             </div>
@@ -1821,10 +2610,21 @@ export default function AdminApp({
           </div>
 
           <div style={{ fontSize: "11px", color: "#6E6E6E", fontWeight: 700, textTransform: "uppercase", letterSpacing: ".5px", marginBottom: "9px" }}>Documents to review</div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginBottom: "18px" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginBottom: "12px" }}>
             {docTile("license.jpg", dr.licenseImageUrl)}
             {docTile("criminal-record.jpg", dr.criminalRecordUrl)}
+            {docTile("driver-photo.jpg", dr.driverPhotoUrl)}
+            {docTile("id-card.jpg", dr.idImageUrl)}
+            {docTile("cart.jpg", dr.carImageUrl)}
           </div>
+
+          {/* The driver ticks both boxes at signup; an unticked one means the
+              record predates the current onboarding form. */}
+          <div style={{ display: "flex", gap: "8px", marginBottom: "18px", flexWrap: "wrap" }}>
+            <Chip label={dr.infoConfirmed ? "Info confirmed" : "Info not confirmed"} color={dr.infoConfirmed ? C.green : C.amber} />
+            <Chip label={dr.termsAccepted ? "Terms accepted" : "Terms not accepted"} color={dr.termsAccepted ? C.green : C.amber} />
+          </div>
+
           {missingDoc && (
             <div style={{ background: "rgba(255,167,38,.1)", border: "1px solid rgba(255,167,38,.3)", borderRadius: "10px", padding: "11px 14px", marginBottom: "18px", fontSize: "12.5px", color: "#FFD08A", fontWeight: 600 }}>
               ⚠ A required document is missing — can&apos;t approve responsibly until uploaded.

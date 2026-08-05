@@ -53,12 +53,34 @@ service cloud.firestore {
     // Profile docs. Owner-only writes; role and phone are immutable from the
     // client (prevents privilege escalation to admin and phone spoofing).
     match /users/{uid} {
+      // A field the owner may fill in once but never change afterwards. Unset,
+      // null and '' all count as "not yet set", so accounts created before the
+      // field existed can still adopt it on their next profile save.
+      function keepsOnceSet(field) {
+        return !(field in resource.data)
+               || resource.data[field] == null
+               || resource.data[field] == ''
+               || request.resource.data.get(field, null) == resource.data[field];
+      }
+
       allow read: if isSignedIn();
       allow create: if isUser(uid)
                     && request.resource.data.role in ['rider', 'driver'];
+      // `walletBalance` is money — server-owned. The owner may edit their profile
+      // but must NEVER change their own balance (blocks self-crediting). It is
+      // credited only by the admin app (Admin SDK, bypasses rules) and debited
+      // only by the onRideCompleted Cloud Function.
+      // `referralCode` / `referredBy` are also locked after creation: the code
+      // is reserved in referral_codes/{CODE}, so letting the owner rewrite it
+      // would desync the reservation, and a rewritable `referredBy` would let
+      // anyone re-attribute themselves to farm invite rewards.
       allow update: if (isUser(uid)
                         && request.resource.data.role == resource.data.role
-                        && request.resource.data.phone == resource.data.phone)
+                        && request.resource.data.phone == resource.data.phone
+                        && request.resource.data.get('walletBalance', 0)
+                             == resource.data.get('walletBalance', 0)
+                        && keepsOnceSet('referralCode')
+                        && keepsOnceSet('referredBy'))
                     || isAdmin();
       allow delete: if false;
     }
@@ -189,12 +211,58 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // ── referral_codes/{CODE} ────────────────────────────────────────────────
+    // The invite-code registry: the doc id IS the code, mapping it to its owner.
+    // Anyone signed in may resolve a code (that's how a new rider redeems one),
+    // but a code can only ever be claimed once — `create` fails when the doc
+    // already exists, and update/delete are closed, so a code can never be
+    // stolen or re-pointed at another account.
+    match /referral_codes/{code} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn()
+                    && request.resource.data.uid == request.auth.uid
+                    && request.resource.data.keys().hasOnly(['uid', 'createdAt']);
+      allow update, delete: if isAdmin();
+    }
+
+    // ── referrals/{id} ───────────────────────────────────────────────────────
+    // One invite relationship. The INVITEE creates it at signup, always in
+    // `pending` with zero rewards, and can never name themselves as their own
+    // inviter. Only the Cloud Function / admin (Admin SDK, bypasses rules) may
+    // settle it — a client that could flip `status` to 'rewarded' or set the
+    // amounts would be printing wallet money.
+    match /referrals/{id} {
+      // The code must actually belong to the named inviter — otherwise anyone
+      // could spam `pending` rows naming strangers as their inviter and clutter
+      // those users' invite lists.
+      function codeOwner() {
+        return get(/databases/$(database)/documents/referral_codes/$(request.resource.data.code)).data.uid;
+      }
+      allow read: if isAdmin()
+                  || (isSignedIn()
+                      && (resource.data.inviterUid == request.auth.uid
+                          || resource.data.inviteeUid == request.auth.uid));
+      allow create: if isSignedIn()
+                    && request.resource.data.inviteeUid == request.auth.uid
+                    && request.resource.data.inviterUid != request.auth.uid
+                    && request.resource.data.status == 'pending'
+                    && request.resource.data.inviterReward == 0
+                    && request.resource.data.inviteeReward == 0
+                    && codeOwner() == request.resource.data.inviterUid;
+      allow update, delete: if isAdmin();
+    }
+
     // ── settlements/{driverId}_{weekId} ──────────────────────────────────────
     // The driver uploads a payment proof for their own cycle. They may set status
     // only to 'pending'/'submitted' — approval/rejection is admin-only.
     match /settlements/{id} {
+      // Ownership is derived from the doc id (`{driverId}_{weekId}`), NOT from
+      // resource.data — the driver's dashboard streams the current cycle's doc
+      // before it exists, and a resource.data check denies reads of a missing
+      // doc (permission-denied). The id form is stable whether or not the doc
+      // exists, and still scopes list queries to the owner's docs.
       allow read: if isAdmin()
-                  || (isSignedIn() && resource.data.driverId == request.auth.uid);
+                  || (isSignedIn() && id.split('_')[0] == request.auth.uid);
       allow create: if isAdmin()
                     || (request.resource.data.driverId == request.auth.uid
                         && request.resource.data.status in ['pending', 'submitted']);
@@ -203,6 +271,49 @@ service cloud.firestore {
                         && request.resource.data.driverId == request.auth.uid
                         && request.resource.data.status in ['pending', 'submitted']);
       allow delete: if false;
+    }
+
+    // ── cases/{caseId} ───────────────────────────────────────────────────────
+    // Dispute cases. Admin-owned (the admin app uses the Admin SDK and bypasses
+    // these rules). The one client path is a RIDER filing a case against a ride
+    // they were on: source must be 'rider', it starts unassigned/new/no-strike,
+    // and the ride must actually be theirs (rider + driver match the ride doc).
+    // A rider may read their own cases; everything else is admin-only.
+    match /cases/{caseId} {
+      function ride() {
+        return get(/databases/$(database)/documents/rides/$(request.resource.data.rideId)).data;
+      }
+      allow read: if isAdmin()
+                  || (isSignedIn() && resource.data.passengerId == request.auth.uid);
+      allow create: if isAdmin()
+                    || (isSignedIn()
+                        && request.resource.data.passengerId == request.auth.uid
+                        && request.resource.data.source == 'rider'
+                        && request.resource.data.status == 'new'
+                        && request.resource.data.strikeIssued == false
+                        && request.resource.data.assignedAdminId == null
+                        && request.resource.data.category in ['route_dispute',
+                             'billing_dispute', 'driver_behavior',
+                             'vehicle_condition', 'safety', 'other']
+                        && ride().riderId == request.auth.uid
+                        && ride().driverId == request.resource.data.driverId);
+      allow update, delete: if isAdmin();
+    }
+
+    // ── case_notes/{id} ──────────────────────────────────────────────────────
+    // Admins' internal audit log on a case. Never client-accessible.
+    match /case_notes/{id} {
+      allow read, write: if isAdmin();
+    }
+
+    // ── wallet_ledger/{id} ───────────────────────────────────────────────────
+    // Immutable audit trail of wallet credits (admin compensation) and debits
+    // (ride settlement). Written only by the Admin SDK / Cloud Functions — never
+    // from a client. A user may read their own entries.
+    match /wallet_ledger/{id} {
+      allow read: if isAdmin()
+                  || (isSignedIn() && resource.data.uid == request.auth.uid);
+      allow write: if false;
     }
 
     // ── Default deny ─────────────────────────────────────────────────────────

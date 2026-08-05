@@ -1,23 +1,38 @@
 import type {
+  Case,
+  CaseNote,
   Compound,
   Driver,
   Offer,
   Redemption,
+  Referral,
   Ride,
   Rider,
   Settlement,
-} from "./types"; 
+} from "./types";
 
 export function seedDrivers(): Driver[] {
-  return [
-    { uid: "d1", name: "Mahmoud Sobhy", phone: "+20 101 224 8890", compound: "Madinaty", approvalStatus: "pending", isOnline: false, isFree: true, cartNumber: "C-114", licensePlate: "ص د 4821", carType: "EZGO RXV", seatNumber: 4, ratingSum: 0, ratingCount: 0, totalRides: 0, totalEarnings: 0, settlementBlocked: false, lastSettlementAt: null, hasLicense: true, hasRecord: true, joined: "Jun 26, 2026" },
-    { uid: "d2", name: "Karim El-Gohary", phone: "+20 109 778 4412", compound: "Mivida", approvalStatus: "pending", isOnline: false, isFree: true, cartNumber: "C-209", licensePlate: "ب ر 7730", carType: "Club Car Onward", seatNumber: 6, ratingSum: 0, ratingCount: 0, totalRides: 0, totalEarnings: 0, settlementBlocked: false, lastSettlementAt: null, hasLicense: true, hasRecord: false, joined: "Jun 27, 2026" },
-    { uid: "d3", name: "Tarek Mansour", phone: "+20 100 559 2031", compound: "Mountain View iCity", approvalStatus: "approved", isOnline: true, isFree: false, cartNumber: "C-031", licensePlate: "ع ف 1190", carType: "EZGO RXV", seatNumber: 4, ratingSum: 1184, ratingCount: 248, totalRides: 251, totalEarnings: 18420, settlementBlocked: false, lastSettlementAt: "Jun 20, 2026", hasLicense: true, hasRecord: true, joined: "Feb 11, 2026" },
-    { uid: "d4", name: "Hossam Adel", phone: "+20 122 401 7765", compound: "Madinaty", approvalStatus: "approved", isOnline: true, isFree: true, cartNumber: "C-077", licensePlate: "س ن 3344", carType: "Yamaha Drive2", seatNumber: 4, ratingSum: 903, ratingCount: 189, totalRides: 194, totalEarnings: 14100, settlementBlocked: false, lastSettlementAt: "Jun 20, 2026", hasLicense: true, hasRecord: true, joined: "Mar 2, 2026" },
-    { uid: "d5", name: "Sherif Naguib", phone: "+20 111 882 3019", compound: "Palm Hills", approvalStatus: "approved", isOnline: false, isFree: true, cartNumber: "C-152", licensePlate: "ق م 9087", carType: "Club Car Onward", seatNumber: 6, ratingSum: 612, ratingCount: 131, totalRides: 138, totalEarnings: 11260, settlementBlocked: true, lastSettlementAt: "Jun 6, 2026", hasLicense: true, hasRecord: true, joined: "Jan 28, 2026" },
-    { uid: "d6", name: "Amir Fouad", phone: "+20 128 330 5567", compound: "Katameya Heights", approvalStatus: "approved", isOnline: false, isFree: true, cartNumber: "C-198", licensePlate: "د ل 2218", carType: "EZGO Express", seatNumber: 6, ratingSum: 489, ratingCount: 104, totalRides: 109, totalEarnings: 8640, settlementBlocked: false, lastSettlementAt: "Jun 20, 2026", hasLicense: true, hasRecord: true, joined: "Apr 9, 2026" },
-    { uid: "d7", name: "Walid Ezzat", phone: "+20 115 667 1204", compound: "Mivida", approvalStatus: "rejected", isOnline: false, isFree: true, cartNumber: "C-061", licensePlate: "ر ه 5540", carType: "Yamaha Drive2", seatNumber: 4, ratingSum: 0, ratingCount: 0, totalRides: 0, totalEarnings: 0, settlementBlocked: false, lastSettlementAt: null, hasLicense: true, hasRecord: true, joined: "Jun 18, 2026" },
+  // Extended-onboarding fields, defaulted here so each fixture row stays on one
+  // readable line instead of repeating the same seven values.
+  const base = {
+    dob: null,
+    city: "Cairo",
+    driverPhotoUrl: null,
+    idImageUrl: null,
+    carImageUrl: null,
+    infoConfirmed: true,
+    termsAccepted: true,
+  };
+  const rows: Omit<Driver, keyof typeof base>[] = [
+    { uid: "d1", name: "Mahmoud Sobhy", phone: "+20 101 224 8890", compound: "Madinaty", approvalStatus: "pending", isOnline: false, isFree: true, cartNumber: "C-114", licensePlate: "ص د 4821", carType: "EZGO RXV", seatNumber: 4, ratingSum: 0, ratingCount: 0, totalRides: 0, totalEarnings: 0, settlementBlocked: false, lastSettlementAt: null, strikesCount: 0, isBlocked: false, hasLicense: true, hasRecord: true, joined: "Jun 26, 2026" },
+    { uid: "d2", name: "Karim El-Gohary", phone: "+20 109 778 4412", compound: "Mivida", approvalStatus: "pending", isOnline: false, isFree: true, cartNumber: "C-209", licensePlate: "ب ر 7730", carType: "Club Car Onward", seatNumber: 6, ratingSum: 0, ratingCount: 0, totalRides: 0, totalEarnings: 0, settlementBlocked: false, lastSettlementAt: null, strikesCount: 0, isBlocked: false, hasLicense: true, hasRecord: false, joined: "Jun 27, 2026" },
+    { uid: "d3", name: "Tarek Mansour", phone: "+20 100 559 2031", compound: "Mountain View iCity", approvalStatus: "approved", isOnline: true, isFree: false, cartNumber: "C-031", licensePlate: "ع ف 1190", carType: "EZGO RXV", seatNumber: 4, ratingSum: 1184, ratingCount: 248, totalRides: 251, totalEarnings: 18420, settlementBlocked: false, lastSettlementAt: "Jun 20, 2026", strikesCount: 0, isBlocked: false, hasLicense: true, hasRecord: true, joined: "Feb 11, 2026" },
+    { uid: "d4", name: "Hossam Adel", phone: "+20 122 401 7765", compound: "Madinaty", approvalStatus: "approved", isOnline: true, isFree: true, cartNumber: "C-077", licensePlate: "س ن 3344", carType: "Yamaha Drive2", seatNumber: 4, ratingSum: 903, ratingCount: 189, totalRides: 194, totalEarnings: 14100, settlementBlocked: false, lastSettlementAt: "Jun 20, 2026", strikesCount: 0, isBlocked: false, hasLicense: true, hasRecord: true, joined: "Mar 2, 2026" },
+    { uid: "d5", name: "Sherif Naguib", phone: "+20 111 882 3019", compound: "Palm Hills", approvalStatus: "approved", isOnline: false, isFree: true, cartNumber: "C-152", licensePlate: "ق م 9087", carType: "Club Car Onward", seatNumber: 6, ratingSum: 612, ratingCount: 131, totalRides: 138, totalEarnings: 11260, settlementBlocked: true, lastSettlementAt: "Jun 6, 2026", strikesCount: 0, isBlocked: false, hasLicense: true, hasRecord: true, joined: "Jan 28, 2026" },
+    { uid: "d6", name: "Amir Fouad", phone: "+20 128 330 5567", compound: "Katameya Heights", approvalStatus: "approved", isOnline: false, isFree: true, cartNumber: "C-198", licensePlate: "د ل 2218", carType: "EZGO Express", seatNumber: 6, ratingSum: 489, ratingCount: 104, totalRides: 109, totalEarnings: 8640, settlementBlocked: false, lastSettlementAt: "Jun 20, 2026", strikesCount: 2, isBlocked: false, hasLicense: true, hasRecord: true, joined: "Apr 9, 2026" },
+    { uid: "d7", name: "Walid Ezzat", phone: "+20 115 667 1204", compound: "Mivida", approvalStatus: "rejected", isOnline: false, isFree: true, cartNumber: "C-061", licensePlate: "ر ه 5540", carType: "Yamaha Drive2", seatNumber: 4, ratingSum: 0, ratingCount: 0, totalRides: 0, totalEarnings: 0, settlementBlocked: false, lastSettlementAt: null, strikesCount: 0, isBlocked: false, hasLicense: true, hasRecord: true, joined: "Jun 18, 2026" },
   ];
+  return rows.map((d) => ({ ...base, ...d }));
 }
 
 export function seedSettlements(): Settlement[] {
@@ -33,14 +48,22 @@ export function seedSettlements(): Settlement[] {
 
 export function seedRiders(): Rider[] {
   return [
-    { uid: "r1", name: "Youssef Hany", phone: "+20 100 112 4456", compound: "Madinaty", createdAt: "Apr 12, 2026", language: "ar", rides: 34, spent: 1290 },
-    { uid: "r2", name: "Mariam Adel", phone: "+20 122 887 6610", compound: "Mountain View iCity", createdAt: "May 3, 2026", language: "en", rides: 21, spent: 842 },
-    { uid: "r3", name: "Omar Khaled", phone: "+20 109 554 2231", compound: "Mivida", createdAt: "Feb 19, 2026", language: "ar", rides: 58, spent: 2410 },
-    { uid: "r4", name: "Salma Tarek", phone: "+20 111 330 9087", compound: "Madinaty", createdAt: "Jun 1, 2026", language: "en", rides: 9, spent: 318 },
-    { uid: "r5", name: "Ahmed Fathy", phone: "+20 128 776 5540", compound: "Palm Hills", createdAt: "Mar 27, 2026", language: "ar", rides: 47, spent: 1980 },
-    { uid: "r6", name: "Laila Mostafa", phone: "+20 115 220 1199", compound: "Katameya Heights", createdAt: "May 22, 2026", language: "ar", rides: 16, spent: 604 },
-    { uid: "r7", name: "Karim Sobhy", phone: "+20 101 998 3320", compound: "Mivida", createdAt: "Jun 18, 2026", language: "en", rides: 4, spent: 142 },
-    { uid: "r8", name: "Nour El-Din", phone: "+20 106 445 7781", compound: "Madinaty", createdAt: "Jan 30, 2026", language: "ar", rides: 72, spent: 3120 },
+    { uid: "r1", name: "Youssef Hany", phone: "+20 100 112 4456", compound: "Madinaty", createdAt: "Apr 12, 2026", language: "ar", rides: 34, spent: 1290, walletBalance: 0, referralCode: "K7QM2X", referredByName: null },
+    { uid: "r2", name: "Mariam Adel", phone: "+20 122 887 6610", compound: "Mountain View iCity", createdAt: "May 3, 2026", language: "en", rides: 21, spent: 842, walletBalance: 25, referralCode: "P4WTN9", referredByName: null },
+    { uid: "r3", name: "Omar Khaled", phone: "+20 109 554 2231", compound: "Mivida", createdAt: "Feb 19, 2026", language: "ar", rides: 58, spent: 2410, walletBalance: 0, referralCode: "H3ZR6D", referredByName: null },
+    { uid: "r4", name: "Salma Tarek", phone: "+20 111 330 9087", compound: "Madinaty", createdAt: "Jun 1, 2026", language: "en", rides: 9, spent: 318, walletBalance: 10, referralCode: "V8LKC5", referredByName: "Youssef Hany" },
+    { uid: "r5", name: "Ahmed Fathy", phone: "+20 128 776 5540", compound: "Palm Hills", createdAt: "Mar 27, 2026", language: "ar", rides: 47, spent: 1980, walletBalance: 0, referralCode: "T2NBF7", referredByName: null },
+    { uid: "r6", name: "Laila Mostafa", phone: "+20 115 220 1199", compound: "Katameya Heights", createdAt: "May 22, 2026", language: "ar", rides: 16, spent: 604, walletBalance: 0, referralCode: "M9XDQ4", referredByName: null },
+    { uid: "r7", name: "Karim Sobhy", phone: "+20 101 998 3320", compound: "Mivida", createdAt: "Jun 18, 2026", language: "en", rides: 4, spent: 142, walletBalance: 0, referralCode: "R5JHW8", referredByName: "Omar Khaled" },
+    { uid: "r8", name: "Nour El-Din", phone: "+20 106 445 7781", compound: "Madinaty", createdAt: "Jan 30, 2026", language: "ar", rides: 72, spent: 3120, walletBalance: 0, referralCode: "B6YPS3", referredByName: null },
+  ];
+}
+
+export function seedReferrals(): Referral[] {
+  return [
+    { id: "rf1", inviterUid: "r1", inviterName: "Youssef Hany", inviteeUid: "r4", inviteeName: "Salma Tarek", code: "K7QM2X", status: "rewarded", inviterReward: 10, inviteeReward: 10, createdAt: "Jun 1, 09:12", rewardedAt: "Jun 1, 18:40" },
+    { id: "rf2", inviterUid: "r3", inviterName: "Omar Khaled", inviteeUid: "r7", inviteeName: "Karim Sobhy", code: "H3ZR6D", status: "pending", inviterReward: 0, inviteeReward: 0, createdAt: "Jun 18, 14:05", rewardedAt: null },
+    { id: "rf3", inviterUid: "r8", inviterName: "Nour El-Din", inviteeUid: "r6", inviteeName: "Laila Mostafa", code: "B6YPS3", status: "rewarded", inviterReward: 10, inviteeReward: 10, createdAt: "May 22, 11:20", rewardedAt: "May 23, 08:02" },
   ];
 }
 
@@ -103,5 +126,21 @@ export function seedRides(): Ride[] {
     mk({ id: "RD-8851", rider: "Karim Sobhy", driver: "Tarek Mansour", compound: "Mountain View iCity", status: "completed", type: "delivery", distanceKm: 2.9, originalPrice: 28, discount: 10, offerCode: "WELCOME", price: 18, appFee: 2.8, driverNet: 25.2, createdAt: "Jun 27, 11:04", pickup: "iCity Hub", dropoff: "Block 9", itemNote: "Pharmacy order", rating: 5, review: "Fast delivery!" }),
     mk({ id: "RD-8850", rider: "Laila Mostafa", driver: null, compound: "Katameya Heights", status: "expired", distanceKm: 0, originalPrice: 15, price: 15, appFee: 0, driverNet: 0, createdAt: "Jun 27, 10:20", pickup: "Sports Club", dropoff: "A Zone" }),
     mk({ id: "RD-8849", rider: "Mariam Adel", driver: "Hossam Adel", compound: "Madinaty", status: "completed", distanceKm: 2.1, originalPrice: 17, price: 17, appFee: 2.55, driverNet: 14.45, createdAt: "Jun 26, 21:30", pickup: "Gate 4", dropoff: "Club House", rating: 3, review: "Cart was a bit slow." }),
+  ];
+}
+
+export function seedCases(): Case[] {
+  return [
+    { id: "CS-1042", rideId: "RD-8853", passengerId: "r3", passengerName: "Omar Khaled", driverId: "d6", driverName: "Amir Fouad", assignedAdminId: "demo", assignedAdminName: "Rana Adel", source: "email", category: "driver_behavior", priority: "high", status: "under_investigation", passengerComplaintText: "The driver was rude when I asked him to slow down and then cancelled my delivery without warning. This is the second time with the same driver.", resolutionSummary: null, strikeIssued: true, refundAmount: 0, createdAt: "Jun 27, 15:40", createdAtMs: Date.now() - 3_600_000, updatedAt: "Jun 27, 16:10" },
+    { id: "CS-1041", rideId: "RD-8854", passengerId: "r8", passengerName: "Nour El-Din", driverId: "d4", driverName: "Hossam Adel", assignedAdminId: null, assignedAdminName: null, source: "email", category: "billing_dispute", priority: "medium", status: "new", passengerComplaintText: "I was charged a waiting fee of E£5 but the driver arrived late — I did not keep him waiting at all.", resolutionSummary: null, strikeIssued: false, refundAmount: 0, createdAt: "Jun 27, 13:25", createdAtMs: Date.now() - 7_200_000, updatedAt: null },
+    { id: "CS-1040", rideId: "RD-8855", passengerId: "r1", passengerName: "Youssef Hany", driverId: "d3", driverName: "Tarek Mansour", assignedAdminId: "demo", assignedAdminName: "Rana Adel", source: "manual", category: "route_dispute", priority: "low", status: "resolved", passengerComplaintText: "Driver took a longer route than needed through the construction area.", resolutionSummary: "Reviewed the route — the direct path was closed for maintenance that day, so the detour was justified. Explained to the passenger; no action against the driver.", strikeIssued: false, refundAmount: 0, createdAt: "Jun 26, 10:05", createdAtMs: Date.now() - 90_000_000, updatedAt: "Jun 26, 12:30" },
+  ];
+}
+
+export function seedCaseNotes(): CaseNote[] {
+  return [
+    { id: "n1", caseId: "CS-1042", adminId: "demo", adminName: "Rana Adel", noteText: "Reached out to the passenger for more detail. Confirmed prior complaint on RD-8790.", createdAt: "Jun 27, 15:55", createdAtMs: Date.now() - 3_300_000 },
+    { id: "n2", caseId: "CS-1042", adminId: "demo", adminName: "Rana Adel", noteText: "Issued a disciplinary strike to the driver — second offense within a week.", createdAt: "Jun 27, 16:10", createdAtMs: Date.now() - 3_000_000 },
+    { id: "n3", caseId: "CS-1040", adminId: "demo", adminName: "Rana Adel", noteText: "Cross-checked the compound maintenance log — main road was closed Jun 26.", createdAt: "Jun 26, 12:20", createdAtMs: Date.now() - 90_600_000 },
   ];
 }
